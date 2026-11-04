@@ -3,6 +3,7 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::io::{self, Write};
+use std::process::Command;
 use std::time::Instant;
 
 use crate::config::ProviderConfig;
@@ -88,20 +89,28 @@ fn error_detail(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(500).collect())
 }
 
+fn terminal_dimensions() -> (u16, u16) {
+    if let Ok(output) = Command::new("stty").arg("size").output() {
+        if output.status.success() {
+            let value = String::from_utf8_lossy(&output.stdout);
+            let mut parts = value.split_whitespace().filter_map(|part| part.parse::<u16>().ok());
+            if let (Some(rows), Some(columns)) = (parts.next(), parts.next()) {
+                return (columns, rows);
+            }
+        }
+    }
+    let columns = std::env::var("COLUMNS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let rows = std::env::var("LINES").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    (columns, rows)
+}
+
 fn render_gauge(stdout: &mut impl Write, width: u16, height: u16, spinner: &str, tokens: usize, elapsed: f64) -> io::Result<()> {
     if width < 30 || height < 3 { return Ok(()); }
     let speed = if elapsed > 0.0 { tokens as f64 / elapsed } else { 0.0 };
     let label = format!("{spinner} Thinking · ~{speed:.1} tok/s");
     let visible = label.chars().take(width.saturating_sub(1) as usize).collect::<String>();
-    let x = width.saturating_sub(visible.chars().count() as u16);
-    crossterm::queue!(
-        stdout,
-        crossterm::cursor::SavePosition,
-        crossterm::cursor::MoveTo(x, height - 1),
-        crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
-    )?;
-    write!(stdout, "\x1b[2m{visible}\x1b[0m")?;
-    crossterm::queue!(stdout, crossterm::cursor::RestorePosition)?;
+    let x = width.saturating_sub(visible.chars().count() as u16) + 1;
+    write!(stdout, "\x1b[s\x1b[{};{}H\x1b[2K\x1b[2m{visible}\x1b[0m\x1b[u", height, x)?;
     stdout.flush()
 }
 
@@ -135,7 +144,7 @@ pub async fn stream_message(
     let started = Instant::now();
     let mut spinner_index = 0usize;
     let spinner = ["◐", "◓", "◑", "◒"];
-    let (width, height) = crossterm::terminal::size().unwrap_or((0, 0));
+    let (width, height) = terminal_dimensions();
     let mut stdout = io::stdout();
 
     while let Some(chunk) = stream.next().await {
@@ -179,13 +188,7 @@ pub async fn stream_message(
         return Err(anyhow!("The provider returned no readable response"));
     }
     if show_activity && height >= 3 {
-        crossterm::queue!(
-            stdout,
-            crossterm::cursor::SavePosition,
-            crossterm::cursor::MoveTo(0, height - 1),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
-            crossterm::cursor::RestorePosition
-        )?;
+        write!(stdout, "\x1b[s\x1b[{};1H\x1b[2K\x1b[u", height)?;
         stdout.flush()?;
     }
 
