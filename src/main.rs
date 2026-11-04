@@ -1,11 +1,13 @@
 mod config;
 mod memory;
 mod provider;
+mod tui;
 
 use anyhow::{anyhow, Context, Result};
 use config::AppConfig;
 use memory::MemoryStore;
 use provider::{known_providers, list_models, stream_message};
+use tui::Tui;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::io::{self, Write};
@@ -140,22 +142,25 @@ async fn main() -> Result<()> {
         messages.push(json!({"role": "assistant", "content": turn.assistant_response}));
     }
 
-    println!("\n  \x1b[1;38;2;200;255;0mCLUSTER\x1b[0m  \x1b[2mLIBRA v{}\x1b[0m", env!("CARGO_PKG_VERSION"));
-    println!("  Provider  {}  ·  {}", config.provider.name, config.provider.model);
-    println!("  Memory    {} durable · {} conversation turns", memory.data.durable.len(), memory.data.history.len());
-    println!("  \x1b[2m/help for commands · /provider to switch models\x1b[0m\n");
+    let mut ui = Tui::new(&config.provider.name, &config.provider.model)?;
+    for turn in memory.data.history.iter().rev().take(MAX_HISTORY / 2).collect::<Vec<_>>().into_iter().rev() {
+        ui.add_message(0, turn.user_message.clone());
+        ui.add_message(1, turn.assistant_response.clone());
+    }
 
     loop {
-        let input = read_line("\x1b[1;38;2;200;255;0mlibra ›\x1b[0m ")?;
+        let Some(input) = ui.input(None)? else { break; };
         if input.is_empty() { continue; }
         if input == "/exit" || input == "/quit" {
-            println!("\n  Signing off.\n");
+            ui.set_notice("Signing off");
             break;
         }
         if input == "/help" { print_help(); continue; }
         if input == "/provider" {
             if let Err(error) = choose_provider(&client, &mut config).await {
-                eprintln!("  Provider selection failed: {error}");
+                ui.set_notice(&format!("Provider selection failed: {error}"));
+            } else {
+                ui.set_status(&config.provider.name, &config.provider.model);
             }
             continue;
         }
@@ -177,7 +182,7 @@ async fn main() -> Result<()> {
             if !model.trim().is_empty() {
                 config.provider.model = model.trim().to_owned();
                 config.save()?;
-                println!("  Model saved: {}", config.provider.model);
+                ui.set_status(&config.provider.name, &config.provider.model);
             }
             continue;
         }
@@ -190,7 +195,8 @@ async fn main() -> Result<()> {
         if input == "/clear" {
             memory.clear()?;
             messages.clear();
-            println!("  Conversation history cleared.");
+            ui.clear_messages();
+            ui.set_notice("Conversation history cleared");
             continue;
         }
         if input == "/memory" {
@@ -212,7 +218,8 @@ async fn main() -> Result<()> {
                 "reset" => {
                     memory.reset()?;
                     messages.clear();
-                    println!("  All memories reset.");
+                    ui.clear_messages();
+                    ui.set_notice("All memories reset");
                 }
                 "inspect" => {
                     println!("  Durable memories: {}", memory.data.durable.len());
@@ -228,8 +235,16 @@ async fn main() -> Result<()> {
 
         let context = memory.get_relevant_context(&input);
         let request_messages = build_request_messages(&messages, &context, &input);
-        println!();
-        match stream_message(&client, &config.provider, &config.provider.model, &request_messages, config.show_activity).await {
+        ui.add_message(0, input.clone());
+        let provider = config.provider.clone();
+        let model = provider.model.clone();
+        let client_for_request = client.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let request = tokio::spawn(async move {
+            stream_message(&client_for_request, &provider, &model, &request_messages, sender).await
+        });
+        ui.stream(receiver)?;
+        match request.await.context("Provider task failed")? {
             Ok(result) => {
                 memory.add_turn(input.clone(), result.text.clone())?;
                 messages.push(json!({"role": "user", "content": input}));
@@ -238,10 +253,12 @@ async fn main() -> Result<()> {
                     let excess = messages.len() - MAX_HISTORY;
                     messages.drain(0..excess);
                 }
-                println!("\n\x1b[2m~{} tokens · {:.1} tok/s · {:.2}s\x1b[0m\n",
-                    result.estimated_tokens, result.tokens_per_second, result.elapsed_seconds);
+                ui.set_notice(&format!("~{} tokens · {:.1} tok/s · {:.2}s", result.estimated_tokens, result.tokens_per_second, result.elapsed_seconds));
             }
-            Err(error) => eprintln!("\n  Request failed: {error}\n"),
+            Err(error) => {
+                ui.add_message(1, format!("Request failed: {error}"));
+                ui.set_notice("Request failed · see conversation");
+            }
         }
     }
     Ok(())
