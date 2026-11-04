@@ -281,6 +281,8 @@ async fn main() -> Result<()> {
 
         match send_message(&client, api_key, &model, &messages, &context, input).await {
             Ok(reply) => {
+                memory.add_turn(input.to_string(), reply.clone())?;
+
                 messages.push(json!({
                     "role": "user",
                     "content": input
@@ -290,14 +292,12 @@ async fn main() -> Result<()> {
                     "content": reply
                 }));
 
-                memory.add_turn(input.to_string(), messages.last().unwrap()["content"].as_str().unwrap_or_default().to_string())?;
-
                 if messages.len() > MAX_HISTORY {
                     let excess = messages.len() - MAX_HISTORY;
                     messages.drain(0..excess);
                 }
 
-                println!("\n{}\n", messages.last().unwrap()["content"].as_str().unwrap_or_default());
+                println!("\n{reply}\n");
             }
             Err(error) => {
                 eprintln!("\nRequest failed: {error}\n");
