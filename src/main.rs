@@ -104,19 +104,16 @@ async fn main() -> Result<()> {
         "content": SYSTEM_PROMPT
     })];
 
-    messages.extend(memory.data.history.iter().map(|turn| {
-        json!({
+    for turn in &memory.data.history {
+        messages.push(json!({
             "role": "user",
             "content": turn.user_message
-        })
-    }));
-
-    messages.extend(memory.data.history.iter().map(|turn| {
-        json!({
+        }));
+        messages.push(json!({
             "role": "assistant",
             "content": turn.assistant_response
-        })
-    }));
+        }));
+    }
 
     println!();
     println!("  Cluster — Libra v0.3.0");
@@ -226,6 +223,11 @@ async fn main() -> Result<()> {
             "role": "user",
             "content": input
         }));
+
+        let context_msgs = memory.get_relevant_context(&input);
+        for msg in context_msgs {
+            messages.push(msg);
+        }
 
         print!("\nCluster is thinking...\n");
         io::stdout().flush()?;
