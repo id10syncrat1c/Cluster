@@ -200,3 +200,31 @@ pub async fn stream_message(
         tokens_per_second: if elapsed > 0.0 { estimated_tokens as f64 / elapsed } else { 0.0 },
     })
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_catalogue_url_is_derived_from_chat_endpoint() {
+        assert_eq!(
+            models_endpoint("https://api.example/v1/chat/completions"),
+            "https://api.example/v1/models"
+        );
+        assert_eq!(
+            models_endpoint("http://127.0.0.1:8080/v1/chat/completions/"),
+            "http://127.0.0.1:8080/v1/models"
+        );
+    }
+
+    #[test]
+    fn built_in_providers_have_expected_endpoints() {
+        let providers = known_providers();
+        assert_eq!(providers.len(), 4);
+        assert!(providers.iter().any(|provider| provider.name == "OpenRouter"));
+        assert!(providers.iter().any(|provider| provider.name == "OpenAI"));
+        assert!(providers.iter().any(|provider| provider.name == "llama.cpp"));
+        assert!(providers.iter().any(|provider| provider.name == "Custom"));
+    }
+}
