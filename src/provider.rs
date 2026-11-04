@@ -3,7 +3,6 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::sync::mpsc::Sender;
-use std::process::Command;
 use std::time::Instant;
 
 use crate::config::ProviderConfig;
@@ -117,9 +116,6 @@ pub async fn stream_message(
     let mut pending = String::new();
     let mut output = String::new();
     let started = Instant::now();
-    let mut spinner_index = 0usize;
-    let spinner = ["◐", "◓", "◑", "◒"];
-    let (width, height) = terminal_dimensions();
 
     while let Some(chunk) = stream.next().await {
         pending.push_str(&String::from_utf8_lossy(&chunk.context("Connection interrupted while streaming response")?));
