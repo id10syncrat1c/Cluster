@@ -119,7 +119,6 @@ fn print_help() {
     println!("  /models               Refresh and list the current provider's models");
     println!("  /model                Show the current model");
     println!("  /model <id>           Set a model ID");
-    println!("  /thinking             Toggle the activity indicator");
     println!("  /clear                Clear conversation history");
     println!("  /memory               Show memory status");
     println!("  /memory add <text>    Save a durable memory");
@@ -185,12 +184,6 @@ async fn main() -> Result<()> {
                 config.save()?;
                 ui.set_status(&config.provider.name, &config.provider.model);
             }
-            continue;
-        }
-        if input == "/thinking" {
-            config.show_activity = !config.show_activity;
-            config.save()?;
-            println!("  Activity indicator: {}", if config.show_activity { "on" } else { "off" });
             continue;
         }
         if input == "/clear" {
