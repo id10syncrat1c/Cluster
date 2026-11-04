@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     let client = Client::builder()
-        .user_agent("Cluster/0.2.0")
+        .user_agent("Cluster/0.3.0")
         .build()?;
 
     let mut memory = MemoryStore::load()?;
@@ -104,12 +104,24 @@ async fn main() -> Result<()> {
         "content": SYSTEM_PROMPT
     })];
 
-    messages.extend(memory.messages.iter().cloned());
+    messages.extend(memory.data.history.iter().map(|turn| {
+        json!({
+            "role": "user",
+            "content": turn.user_message
+        })
+    }));
+
+    messages.extend(memory.data.history.iter().map(|turn| {
+        json!({
+            "role": "assistant",
+            "content": turn.assistant_response
+        })
+    }));
 
     println!();
-    println!("  Cluster — Libra v0.2.0");
+    println!("  Cluster — Libra v0.3.0");
     println!("  Model: {model}");
-    println!("  Memory: {} messages restored", memory.messages.len());
+    println!("  Memory: {} durable memories, {} conversation turns", memory.data.durable.len(), memory.data.history.len());
     println!("  Type /help for commands.");
     println!();
 
@@ -136,24 +148,62 @@ async fn main() -> Result<()> {
 
         if input == "/help" {
             println!("/help             Show available commands");
-            println!("/clear            Clear conversation memory");
+            println!("/clear            Clear conversation history");
             println!("/memory           Show memory status");
             println!("/model            Show current model");
             println!("/model <name>     Change model");
             println!("/exit             Exit Cluster");
+            println!("/memory export    Export memory to file");
+            println!("/memory reset     Reset all memories");
+            println!("/memory inspect   Show memory inspection");
             continue;
         }
 
         if input == "/clear" {
-            memory.clear()?;
+            memory.data.history.clear();
+            memory.save()?;
             messages.truncate(1);
-            println!("Conversation memory cleared.");
+            println!("Conversation history cleared.");
             continue;
         }
 
-        if input == "/memory" {
-            println!("Stored messages: {}", memory.messages.len());
-            println!("Memory file: {}", memory.path().display());
+        if input.starts_with("/memory ") {
+            let subcommand = input.strip_prefix("/memory ").unwrap_or("").trim();
+
+            match subcommand {
+                "export" => {
+                    let default_path = memory.path().parent().unwrap_or(std::path::Path::new(".")).join("exported_memory.json");
+                    println!("Exporting memory to file. Default path: {}", default_path.display());
+                    memory.export(&default_path)?;
+                    println!("Memory exported to {}", default_path.display());
+                }
+                "reset" => {
+                    memory.reset()?;
+                    messages.truncate(1);
+                    println!("All memories reset.");
+                }
+                "inspect" => {
+                    println!("Durable memories: {}", memory.data.durable.len());
+                    println!("Conversation turns: {}", memory.data.history.len());
+                    if !memory.data.durable.is_empty() {
+                        println!("\nRecent durable memories:");
+                        for mem in memory.data.durable.iter().take(5) {
+                            println!("  [{}] {}...", &mem.content[..std::cmp::min(60, mem.content.len())], mem.category.as_deref().unwrap_or(""));
+                        }
+                    }
+                    if !memory.data.history.is_empty() {
+                        println!("\nRecent conversation turns:");
+                        for turn in memory.data.history.iter().take(3) {
+                            let user_preview = &turn.user_message[..std::cmp::min(50, turn.user_message.len())];
+                            let resp_preview = &turn.assistant_response[..std::cmp::min(50, turn.assistant_response.len())];
+                            println!("  User: {}... Assistant: {}...", user_preview, resp_preview);
+                        }
+                    }
+                }
+                _ => {
+                    println!("Unknown memory subcommand. Use: export, reset, inspect");
+                }
+            }
             continue;
         }
 
@@ -187,16 +237,14 @@ async fn main() -> Result<()> {
                     "content": reply
                 }));
 
+                memory.add_turn(input.to_string(), reply.clone())?;
+
                 if messages.len() > MAX_HISTORY + 1 {
                     let excess = messages.len() - MAX_HISTORY - 1;
                     messages.drain(1..1 + excess);
                 }
 
-                memory.messages = messages[1..].to_vec();
-
-                if let Err(error) = memory.save() {
-                    eprintln!("\nMemory save failed: {error}");
-                }
+                memory.save()?;
 
                 println!("\n{}\n", reply);
             }

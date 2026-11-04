@@ -1,11 +1,36 @@
-use anyhow::{Context, Result, anyhow};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::hash::{Hash, Hasher};
+use anyhow::{Context, Result};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DurableMemory {
+    pub id: String,
+    pub content: String,
+    pub category: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConversationTurn {
+    pub id: String,
+    pub user_message: String,
+    pub assistant_response: String,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryData {
+    pub durable: Vec<DurableMemory>,
+    pub history: Vec<ConversationTurn>,
+}
 
 pub struct MemoryStore {
     path: PathBuf,
-    pub messages: Vec<Value>,
+    pub data: MemoryData,
 }
 
 impl MemoryStore {
@@ -24,53 +49,173 @@ impl MemoryStore {
 
         let path = directory.join("memory.json");
 
-        let messages = if path.exists() {
-            let data = fs::read_to_string(&path)
-                .context("Could not read memory file")?;
+        let data = if path.exists() {
+            let content = fs::read_to_string(&path)
+                .with_context(|| "Could not read memory file")?;
 
-            let loaded: Vec<Value> = serde_json::from_str(&data)
-                .context("Memory file contains invalid JSON")?;
+            match serde_json::from_str::<MemoryData>(&content) {
+                Ok(md) => md,
+                Err(e) => {
+                    eprintln!("Warning: memory file corrupted ({e}), attempting migration");
 
-            for message in &loaded {
-                let role = message["role"].as_str()
-                    .ok_or_else(|| anyhow!("Invalid message role in memory"))?;
+                    if let Ok(messages) =
+                        serde_json::from_str::<Vec<serde_json::Value>>(&content)
+                    {
+                        let durable = Vec::new();
+                        let mut history = Vec::new();
+                        let mut current_user: Option<String> = None;
 
-                if role != "user" && role != "assistant" {
-                    return Err(anyhow!("Unexpected message role in memory"));
-                }
+                        for msg in messages {
+                            if let (Some(role), Some(content)) =
+                                (msg["role"].as_str(), msg["content"].as_str())
+                            {
+                                match role {
+                                    "user" => {
+                                        current_user = Some(content.to_string());
+                                    }
+                                    "assistant" => {
+                                        if let Some(user_msg) = current_user.take() {
+                                            history.push(ConversationTurn {
+                                                id: generate_id(),
+                                                user_message: user_msg,
+                                                assistant_response: content.to_string(),
+                                                timestamp: current_timestamp(),
+                                            });
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
 
-                if !message["content"].is_string() {
-                    return Err(anyhow!("Invalid message content in memory"));
+                        if let Some(user_msg) = current_user {
+                            history.push(ConversationTurn {
+                                id: generate_id(),
+                                user_message: user_msg,
+                                assistant_response: String::new(),
+                                timestamp: current_timestamp(),
+                            });
+                        }
+
+                        MemoryData { durable, history }
+                    } else {
+                        eprintln!("Warning: memory file is corrupted, starting fresh");
+                        MemoryData::default()
+                    }
                 }
             }
-
-            loaded
         } else {
-            Vec::new()
+            MemoryData::default()
         };
 
-        Ok(Self { path, messages })
+        Ok(Self { path, data })
     }
 
     pub fn save(&self) -> Result<()> {
-        let data = serde_json::to_string_pretty(&self.messages)?;
+        let data = serde_json::to_string_pretty(&self.data)?;
         let temporary = self.path.with_extension("tmp");
 
         fs::write(&temporary, data)
-            .context("Could not write temporary memory file")?;
-
+            .with_context(|| "Could not write temporary memory file")?;
         fs::rename(&temporary, &self.path)
-            .context("Could not replace memory file")?;
+            .with_context(|| "Could not replace memory file")?;
 
         Ok(())
     }
 
     pub fn clear(&mut self) -> Result<()> {
-        self.messages.clear();
+        self.data.history.clear();
+        self.save()
+    }
+
+    pub fn reset(&mut self) -> Result<()> {
+        self.data = MemoryData::default();
+        self.save()
+    }
+
+    pub fn export(&self, path: &PathBuf) -> Result<()> {
+        let data = serde_json::to_string_pretty(&self.data)?;
+        fs::write(path, data)
+            .with_context(|| "Could not export memory file")?;
+        Ok(())
+    }
+
+    pub fn add_durable(
+        &mut self,
+        content: String,
+        category: Option<String>,
+    ) -> Result<()> {
+        let memory = DurableMemory {
+            id: generate_id(),
+            content,
+            category,
+            created_at: current_timestamp(),
+            updated_at: current_timestamp(),
+        };
+        self.data.durable.push(memory);
+        self.save()
+    }
+
+    pub fn add_turn(
+        &mut self,
+        user_message: String,
+        assistant_response: String,
+    ) -> Result<()> {
+        let turn = ConversationTurn {
+            id: generate_id(),
+            user_message,
+            assistant_response,
+            timestamp: current_timestamp(),
+        };
+        self.data.history.push(turn);
         self.save()
     }
 
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
+
+    pub fn retrieve_relevant(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Vec<&DurableMemory> {
+        let query_lower = query.to_lowercase();
+        let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+
+        let scored: Vec<(&DurableMemory, usize)> = self
+            .data
+            .durable
+            .iter()
+            .map(|m| {
+                let content_lower = m.content.to_lowercase();
+                let score = query_words
+                    .iter()
+                    .filter(|word| content_lower.contains(*word))
+                    .count();
+                (m, score)
+            })
+            .filter(|(_, score)| *score > 0)
+            .collect();
+
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(m, _)| m)
+            .collect()
+    }
+}
+
+fn generate_id() -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    current_timestamp().hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
