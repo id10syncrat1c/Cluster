@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::io::{self, Write};
+use std::sync::mpsc::Sender;
 use std::process::Command;
 use std::time::Instant;
 
@@ -89,37 +89,12 @@ fn error_detail(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(500).collect())
 }
 
-fn terminal_dimensions() -> (u16, u16) {
-    if let Ok(output) = Command::new("stty").arg("size").output() {
-        if output.status.success() {
-            let value = String::from_utf8_lossy(&output.stdout);
-            let mut parts = value.split_whitespace().filter_map(|part| part.parse::<u16>().ok());
-            if let (Some(rows), Some(columns)) = (parts.next(), parts.next()) {
-                return (columns, rows);
-            }
-        }
-    }
-    let columns = std::env::var("COLUMNS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let rows = std::env::var("LINES").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-    (columns, rows)
-}
-
-fn render_gauge(stdout: &mut impl Write, width: u16, height: u16, spinner: &str, tokens: usize, elapsed: f64) -> io::Result<()> {
-    if width < 30 || height < 3 { return Ok(()); }
-    let speed = if elapsed > 0.0 { tokens as f64 / elapsed } else { 0.0 };
-    let label = format!("{spinner} Thinking · ~{speed:.1} tok/s");
-    let visible = label.chars().take(width.saturating_sub(1) as usize).collect::<String>();
-    let x = width.saturating_sub(visible.chars().count() as u16) + 1;
-    write!(stdout, "\x1b[s\x1b[{};{}H\x1b[2K\x1b[2m{visible}\x1b[0m\x1b[u", height, x)?;
-    stdout.flush()
-}
-
 pub async fn stream_message(
     client: &Client,
     provider: &ProviderConfig,
     model: &str,
     messages: &[Value],
-    show_activity: bool,
+    chunks: Sender<String>,
 ) -> Result<StreamResult> {
     let mut request = client.post(&provider.endpoint).json(&json!({
         "model": model,
@@ -145,7 +120,6 @@ pub async fn stream_message(
     let mut spinner_index = 0usize;
     let spinner = ["◐", "◓", "◑", "◒"];
     let (width, height) = terminal_dimensions();
-    let mut stdout = io::stdout();
 
     while let Some(chunk) = stream.next().await {
         pending.push_str(&String::from_utf8_lossy(&chunk.context("Connection interrupted while streaming response")?));
@@ -160,36 +134,24 @@ pub async fn stream_message(
             let content = &event["choices"][0]["delta"]["content"];
             if let Some(text) = content.as_str() {
                 if !text.is_empty() {
-                    print!("{text}");
-                    io::stdout().flush()?;
                     output.push_str(text);
+                    let _ = chunks.send(text.to_string());
                 }
             } else if let Some(parts) = content.as_array() {
                 for part in parts {
                     if let Some(text) = part["text"].as_str() {
-                        print!("{text}");
-                        io::stdout().flush()?;
                         output.push_str(text);
+                        let _ = chunks.send(text.to_string());
                     }
                 }
             }
 
-            if show_activity && !output.is_empty() {
-                let tokens = output.chars().count().div_ceil(4);
-                let elapsed = started.elapsed().as_secs_f64().max(0.001);
-                render_gauge(&mut stdout, width, height, spinner[spinner_index % spinner.len()], tokens, elapsed)?;
-                spinner_index += 1;
-            }
         }
     }
 
     let elapsed = started.elapsed().as_secs_f64();
     if output.trim().is_empty() {
         return Err(anyhow!("The provider returned no readable response"));
-    }
-    if show_activity && height >= 3 {
-        write!(stdout, "\x1b[s\x1b[{};1H\x1b[2K\x1b[u", height)?;
-        stdout.flush()?;
     }
 
     let estimated_tokens = output.chars().count().div_ceil(4);
