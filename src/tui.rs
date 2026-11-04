@@ -61,7 +61,12 @@ impl Tui {
                         KeyCode::Esc => return Ok(None),
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
                         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => { self.input.insert(self.cursor, '\n'); self.cursor += 1; }
-                        KeyCode::Enter => return Ok(Some(self.input.iter().collect::<String>().trim().to_string())),
+                        KeyCode::Enter => {
+                            let value = self.input.iter().collect::<String>().trim().to_string();
+                            self.input.clear();
+                            self.cursor = 0;
+                            return Ok(Some(value));
+                        },
                         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => { self.input.insert(self.cursor, c); self.cursor += 1; }
                         KeyCode::Backspace if self.cursor > 0 => { self.cursor -= 1; self.input.remove(self.cursor); }
                         KeyCode::Delete if self.cursor < self.input.len() => { self.input.remove(self.cursor); }
@@ -164,7 +169,8 @@ impl Tui {
         self.text(1, cy + 1, "› ", 1, 2);
         let input = self.input.iter().collect::<String>();
         let max = width.saturating_sub(4);
-        let visible = input.chars().rev().take(max).collect::<Vec<_>>().into_iter().rev().collect::<String>();
+        let input_start = self.cursor.saturating_sub(max);
+        let visible = input.chars().skip(input_start).take(max).collect::<String>();
         self.text(3, cy + 1, &visible, 0, max);
         self.text(1, height.saturating_sub(1), "Shift+Enter newline · PgUp/PgDn scroll · Ctrl+C exit", 2, width.saturating_sub(2));
         let mut stdout = io::stdout();
@@ -188,7 +194,13 @@ impl Tui {
                 }
             }
         }
-        queue!(stdout, ResetColor, MoveTo(3, cy.saturating_add(1) as u16))?;
+        let cursor_x = 3usize.saturating_add(self.cursor.saturating_sub(input_start));
+        queue!(
+            stdout,
+            ResetColor,
+            MoveTo(cursor_x.min(width.saturating_sub(1)) as u16, cy.saturating_add(1) as u16),
+            Show
+        )?;
         stdout.flush()?;
         Ok(())
     }
