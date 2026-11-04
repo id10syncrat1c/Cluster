@@ -3,14 +3,14 @@ mod memory;
 mod provider;
 mod tui;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use config::AppConfig;
 use memory::MemoryStore;
 use provider::{known_providers, list_models, stream_message};
-use tui::Tui;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{self, Write};
+use tui::Tui;
 
 const MAX_HISTORY: usize = 40;
 const SYSTEM_PROMPT: &str = r#"You are an AI assistant operating through the Cluster agent runtime.
@@ -33,7 +33,11 @@ fn build_request_messages(history: &[Value], context: &[Value], input: &str) -> 
 fn preview(value: &str, limit: usize) -> String {
     let mut chars = value.chars();
     let result = chars.by_ref().take(limit).collect::<String>();
-    if chars.next().is_some() { format!("{result}…") } else { result }
+    if chars.next().is_some() {
+        format!("{result}…")
+    } else {
+        result
+    }
 }
 
 fn read_line(prompt: &str) -> Result<String> {
@@ -52,19 +56,32 @@ async fn choose_provider(client: &Client, config: &mut AppConfig) -> Result<()> 
     println!("  0. Cancel");
 
     let selection = read_line("\n  Provider > ")?;
-    if selection == "0" || selection.is_empty() { return Ok(()); }
-    let index = selection.parse::<usize>().context("Enter a provider number")?;
-    let mut selected = known_providers().get(index.saturating_sub(1))
-        .cloned().ok_or_else(|| anyhow!("Unknown provider selection"))?;
+    if selection == "0" || selection.is_empty() {
+        return Ok(());
+    }
+    let index = selection
+        .parse::<usize>()
+        .context("Enter a provider number")?;
+    let mut selected = known_providers()
+        .get(index.saturating_sub(1))
+        .cloned()
+        .ok_or_else(|| anyhow!("Unknown provider selection"))?;
 
     if selected.name == "Custom" {
-        let endpoint = read_line(&format!("  OpenAI-compatible chat completions URL [{}] > ", selected.endpoint))?;
-        if !endpoint.is_empty() { selected.endpoint = endpoint; }
+        let endpoint = read_line(&format!(
+            "  OpenAI-compatible chat completions URL [{}] > ",
+            selected.endpoint
+        ))?;
+        if !endpoint.is_empty() {
+            selected.endpoint = endpoint;
+        }
         if !selected.endpoint.starts_with("http://") && !selected.endpoint.starts_with("https://") {
             return Err(anyhow!("Provider URL must start with http:// or https://"));
         }
         let env_name = read_line("  API key environment variable [CLUSTER_API_KEY] > ")?;
-        if !env_name.is_empty() { selected.api_key_env = env_name; }
+        if !env_name.is_empty() {
+            selected.api_key_env = env_name;
+        }
     }
 
     if selected.name == "llama.cpp" {
@@ -101,15 +118,22 @@ async fn choose_provider(client: &Client, config: &mut AppConfig) -> Result<()> 
             read_line("  Model ID > ")?
         } else {
             let index = choice.parse::<usize>().context("Enter a model number")?;
-            catalogue.get(index.saturating_sub(1)).cloned()
+            catalogue
+                .get(index.saturating_sub(1))
+                .cloned()
                 .ok_or_else(|| anyhow!("Unknown model selection"))?
         }
     };
 
-    if !model.trim().is_empty() { selected.model = model; }
+    if !model.trim().is_empty() {
+        selected.model = model;
+    }
     config.provider = selected;
     config.save()?;
-    println!("\n  Provider saved: {} · {}", config.provider.name, config.provider.model);
+    println!(
+        "\n  Provider saved: {} · {}",
+        config.provider.name, config.provider.model
+    );
     Ok(())
 }
 
@@ -137,25 +161,50 @@ async fn main() -> Result<()> {
     let mut memory = MemoryStore::load()?;
     let mut messages = Vec::new();
 
-    for turn in memory.data.history.iter().rev().take(MAX_HISTORY / 2).collect::<Vec<_>>().into_iter().rev() {
+    for turn in memory
+        .data
+        .history
+        .iter()
+        .rev()
+        .take(MAX_HISTORY / 2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         messages.push(json!({"role": "user", "content": turn.user_message}));
         messages.push(json!({"role": "assistant", "content": turn.assistant_response}));
     }
 
     let mut ui = Tui::new(&config.provider.name, &config.provider.model)?;
-    for turn in memory.data.history.iter().rev().take(MAX_HISTORY / 2).collect::<Vec<_>>().into_iter().rev() {
+    for turn in memory
+        .data
+        .history
+        .iter()
+        .rev()
+        .take(MAX_HISTORY / 2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         ui.add_message(0, turn.user_message.clone());
         ui.add_message(1, turn.assistant_response.clone());
     }
 
     loop {
-        let Some(input) = ui.input(None)? else { break; };
-        if input.is_empty() { continue; }
+        let Some(input) = ui.input(None)? else {
+            break;
+        };
+        if input.is_empty() {
+            continue;
+        }
         if input == "/exit" || input == "/quit" {
             ui.set_notice("Signing off");
             break;
         }
-        if input == "/help" { print_help(); continue; }
+        if input == "/help" {
+            print_help();
+            continue;
+        }
         if input == "/provider" {
             if let Err(error) = choose_provider(&client, &mut config).await {
                 ui.set_notice(&format!("Provider selection failed: {error}"));
@@ -167,8 +216,12 @@ async fn main() -> Result<()> {
         if input == "/models" {
             match list_models(&client, &config.provider).await {
                 Ok(models) => {
-                    if models.is_empty() { println!("  Provider returned no models."); }
-                    for model in models { println!("  {model}"); }
+                    if models.is_empty() {
+                        println!("  Provider returned no models.");
+                    }
+                    for model in models {
+                        println!("  {model}");
+                    }
                 }
                 Err(error) => eprintln!("  Could not list models: {error}"),
             }
@@ -194,18 +247,30 @@ async fn main() -> Result<()> {
             continue;
         }
         if input == "/memory" {
-            println!("  Memory: {} durable memories, {} conversation turns", memory.data.durable.len(), memory.data.history.len());
+            println!(
+                "  Memory: {} durable memories, {} conversation turns",
+                memory.data.durable.len(),
+                memory.data.history.len()
+            );
             continue;
         }
         if let Some(content) = input.strip_prefix("/memory add ") {
-            if content.trim().is_empty() { println!("  Usage: /memory add <text>"); }
-            else { memory.add_durable(content.trim().to_owned(), None)?; println!("  Durable memory saved."); }
+            if content.trim().is_empty() {
+                println!("  Usage: /memory add <text>");
+            } else {
+                memory.add_durable(content.trim().to_owned(), None)?;
+                println!("  Durable memory saved.");
+            }
             continue;
         }
         if let Some(subcommand) = input.strip_prefix("/memory ") {
             match subcommand.trim() {
                 "export" => {
-                    let path = memory.path().parent().unwrap_or(std::path::Path::new(".")).join("exported_memory.json");
+                    let path = memory
+                        .path()
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .join("exported_memory.json");
                     memory.export(&path)?;
                     println!("  Memory exported to {}", path.display());
                 }
@@ -219,7 +284,11 @@ async fn main() -> Result<()> {
                     println!("  Durable memories: {}", memory.data.durable.len());
                     println!("  Conversation turns: {}", memory.data.history.len());
                     for item in memory.data.durable.iter().rev().take(5) {
-                        println!("  [{}] {}", item.category.as_deref().unwrap_or("uncategorized"), preview(&item.content, 70));
+                        println!(
+                            "  [{}] {}",
+                            item.category.as_deref().unwrap_or("uncategorized"),
+                            preview(&item.content, 70)
+                        );
                     }
                 }
                 _ => println!("  Unknown memory command. Use add, export, reset, or inspect."),
@@ -235,7 +304,14 @@ async fn main() -> Result<()> {
         let client_for_request = client.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         let request = tokio::spawn(async move {
-            stream_message(&client_for_request, &provider, &model, &request_messages, sender).await
+            stream_message(
+                &client_for_request,
+                &provider,
+                &model,
+                &request_messages,
+                sender,
+            )
+            .await
         });
         ui.stream(receiver)?;
         match request.await.context("Provider task failed")? {
@@ -247,7 +323,10 @@ async fn main() -> Result<()> {
                     let excess = messages.len() - MAX_HISTORY;
                     messages.drain(0..excess);
                 }
-                ui.set_notice(&format!("~{} tokens · {:.1} tok/s · {:.2}s", result.estimated_tokens, result.tokens_per_second, result.elapsed_seconds));
+                ui.set_notice(&format!(
+                    "~{} tokens · {:.1} tok/s · {:.2}s",
+                    result.estimated_tokens, result.tokens_per_second, result.elapsed_seconds
+                ));
             }
             Err(error) => {
                 ui.add_message(1, format!("Request failed: {error}"));

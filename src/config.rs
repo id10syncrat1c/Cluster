@@ -32,7 +32,10 @@ impl Default for ProviderConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { provider: ProviderConfig::default(), show_activity: true }
+        Self {
+            provider: ProviderConfig::default(),
+            show_activity: true,
+        }
     }
 }
 
@@ -48,7 +51,9 @@ impl AppConfig {
 
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
-        if !path.exists() { return Ok(Self::default()); }
+        if !path.exists() {
+            return Ok(Self::default());
+        }
         let raw = fs::read_to_string(path).context("Could not read Cluster config")?;
         toml::from_str(&raw).context("Cluster config is invalid TOML")
     }

@@ -41,8 +41,7 @@ impl MemoryStore {
         let base = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             PathBuf::from(xdg)
         } else {
-            PathBuf::from(std::env::var("HOME").context("HOME is not set")?)
-                .join(".local/share")
+            PathBuf::from(std::env::var("HOME").context("HOME is not set")?).join(".local/share")
         };
 
         Self::load_at_path(base.join("cluster").join("memory.json"))
@@ -64,10 +63,8 @@ impl MemoryStore {
                         migrated = true;
                         Self::migrate_legacy_messages(messages)
                     } else {
-                        let backup = path.with_file_name(format!(
-                            "memory.corrupt-{}.json",
-                            generate_id()
-                        ));
+                        let backup =
+                            path.with_file_name(format!("memory.corrupt-{}.json", generate_id()));
                         fs::rename(&path, &backup)
                             .context("Could not preserve corrupted memory file")?;
                         eprintln!(
@@ -142,9 +139,7 @@ impl MemoryStore {
 
     pub fn save(&self) -> Result<()> {
         let data = serde_json::to_string_pretty(&self.data)?;
-        let temporary = self
-            .path
-            .with_extension(format!("tmp-{}", generate_id()));
+        let temporary = self.path.with_extension(format!("tmp-{}", generate_id()));
 
         fs::write(&temporary, data).context("Could not write temporary memory file")?;
         fs::rename(&temporary, &self.path).context("Could not replace memory file")?;
@@ -168,11 +163,7 @@ impl MemoryStore {
         Ok(())
     }
 
-    pub fn add_durable(
-        &mut self,
-        content: String,
-        category: Option<String>,
-    ) -> Result<()> {
+    pub fn add_durable(&mut self, content: String, category: Option<String>) -> Result<()> {
         if content.trim().is_empty() {
             bail!("Durable memory cannot be empty");
         }
@@ -188,11 +179,7 @@ impl MemoryStore {
         self.save()
     }
 
-    pub fn add_turn(
-        &mut self,
-        user_message: String,
-        assistant_response: String,
-    ) -> Result<()> {
+    pub fn add_turn(&mut self, user_message: String, assistant_response: String) -> Result<()> {
         let turn = ConversationTurn {
             id: generate_id(),
             user_message,
@@ -207,11 +194,7 @@ impl MemoryStore {
         &self.path
     }
 
-    pub fn retrieve_relevant(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Vec<&DurableMemory> {
+    pub fn retrieve_relevant(&self, query: &str, limit: usize) -> Vec<&DurableMemory> {
         let words = query
             .to_lowercase()
             .split_whitespace()
@@ -239,9 +222,7 @@ impl MemoryStore {
             .filter(|(_, _, score)| *score > 0)
             .collect::<Vec<_>>();
 
-        scored.sort_by(|left, right| {
-            right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0))
-        });
+        scored.sort_by(|left, right| right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0)));
 
         scored
             .into_iter()
@@ -335,15 +316,9 @@ mod tests {
 
         assert_eq!(reloaded.data.history.len(), 2);
         assert_eq!(reloaded.data.history[0].user_message, "first question");
-        assert_eq!(
-            reloaded.data.history[0].assistant_response,
-            "first answer"
-        );
+        assert_eq!(reloaded.data.history[0].assistant_response, "first answer");
         assert_eq!(reloaded.data.history[1].user_message, "second question");
-        assert_eq!(
-            reloaded.data.history[1].assistant_response,
-            "second answer"
-        );
+        assert_eq!(reloaded.data.history[1].assistant_response, "second answer");
 
         cleanup(&path);
     }
@@ -382,10 +357,12 @@ mod tests {
 
         assert_eq!(context.len(), 1);
         assert_eq!(context[0]["role"], "user");
-        assert!(context[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Uses Rust for Cluster"));
+        assert!(
+            context[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Uses Rust for Cluster")
+        );
 
         cleanup(&path);
     }
@@ -409,7 +386,8 @@ mod tests {
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.path())
             .filter(|entry| {
-                entry.file_name()
+                entry
+                    .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.starts_with("memory.corrupt-"))
             })
@@ -432,7 +410,9 @@ mod tests {
 
     #[test]
     fn generated_ids_are_unique_within_one_process() {
-        let ids = (0..100).map(|_| generate_id()).collect::<std::collections::HashSet<_>>();
+        let ids = (0..100)
+            .map(|_| generate_id())
+            .collect::<std::collections::HashSet<_>>();
         assert_eq!(ids.len(), 100);
     }
 }
