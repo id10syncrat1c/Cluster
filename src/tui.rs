@@ -205,3 +205,39 @@ impl Tui {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_tui() -> Tui {
+        Tui {
+            width: 40,
+            height: 12,
+            previous: Vec::new(),
+            current: Vec::new(),
+            messages: Vec::new(),
+            input: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+            status: String::new(),
+        }
+    }
+
+    #[test]
+    fn wraps_messages_to_the_available_width() {
+        let mut tui = test_tui();
+        tui.add_message(0, "abcdefghijk".into());
+        let lines = tui.lines(9);
+        assert_eq!(lines[0], (0, "you  abcd".into()));
+        assert_eq!(lines[1], (0, "you  efgh".into()));
+        assert_eq!(lines[2], (0, "you  ijk".into()));
+    }
+
+    #[test]
+    fn cell_comparison_marks_changed_content_and_style() {
+        let blank = Cell::default();
+        assert_ne!(blank, Cell { ch: 'x', style: 0 });
+        assert_ne!(blank, Cell { ch: ' ', style: 1 });
+    }
+}
