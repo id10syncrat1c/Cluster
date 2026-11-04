@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -204,6 +205,18 @@ impl MemoryStore {
             .map(|(m, _)| m)
             .collect()
     }
+
+    pub fn get_relevant_context(&self, query: &str) -> Vec<Value> {
+        let relevant = self.retrieve_relevant(query, 5);
+        let mut msgs = Vec::new();
+        for mem in relevant {
+            msgs.push(json!({
+                "role": "system",
+                "content": mem.content.clone()
+            }));
+        }
+        msgs
+    }
 }
 
 fn generate_id() -> String {
@@ -218,4 +231,93 @@ fn current_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_memory_path() -> PathBuf {
+        let tmp = std::env::temp_dir().join("cluster_test_memory.json");
+        if tmp.exists() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        tmp
+    }
+
+    #[test]
+    fn test_memory_load_empty() {
+        let path = test_memory_path();
+        let original = std::env::var("XDG_DATA_HOME");
+        let _ = std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::env::set_var("HOME", path.parent().unwrap());
+
+        let result = MemoryStore::load();
+
+        assert!(result.is_ok());
+        let store = result.unwrap();
+        assert!(store.data.durable.is_empty());
+        assert!(store.data.history.is_empty());
+
+        if let Ok(v) = original {
+            let _ = std::env::set_var("XDG_DATA_HOME", v);
+        } else {
+            let _ = std::env::remove_var("XDG_DATA_HOME");
+        }
+    }
+
+    #[test]
+    fn test_memory_add_and_save() {
+        let path = test_memory_path();
+        let original_home = std::env::var("HOME").unwrap_or_default();
+        let _ = std::env::set_var("HOME", path.parent().unwrap());
+
+        let mut store = MemoryStore::load().unwrap();
+        let _ = store.add_durable("hello world".to_string(), Some("test".to_string()));
+        assert_eq!(store.data.durable.len(), 1);
+        assert_eq!(store.data.durable[0].content, "hello world");
+
+        let _ = store.add_turn("user".to_string(), "assistant".to_string());
+        assert_eq!(store.data.history.len(), 1);
+        assert_eq!(store.data.history[0].user_message, "user");
+
+        let _ = store.clear();
+        assert_eq!(store.data.history.len(), 0);
+
+        let _ = store.reset();
+        assert_eq!(store.data.durable.len(), 0);
+
+        let _ = std::env::set_var("HOME", original_home);
+    }
+
+    #[test]
+    fn test_memory_export() {
+        let path = test_memory_path();
+        let original_home = std::env::var("HOME").unwrap_or_default();
+        let _ = std::env::set_var("HOME", path.parent().unwrap());
+
+        let store = MemoryStore::load().unwrap();
+        let export_path = path.with_extension("export.json");
+        let _ = store.export(&export_path);
+        assert!(export_path.exists());
+
+        let _ = std::env::set_var("HOME", original_home);
+    }
+
+    #[test]
+    fn test_retrieve_relevant() {
+        let path = test_memory_path();
+        let original_home = std::env::var("HOME").unwrap_or_default();
+        let _ = std::env::set_var("HOME", path.parent().unwrap());
+
+        let mut store = MemoryStore::load().unwrap();
+        let _ = store.add_durable("rust programming".to_string(), None);
+        let _ = store.add_durable("python scripting".to_string(), None);
+
+        let relevant = store.retrieve_relevant("rust", 10);
+        assert_eq!(relevant.len(), 1);
+        assert_eq!(relevant[0].content, "rust programming");
+
+        let _ = std::env::set_var("HOME", original_home);
+    }
 }
