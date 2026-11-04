@@ -81,6 +81,8 @@ impl Tui {
 
     pub fn add_message(&mut self, role: u8, content: String) { self.messages.push(Message { role, content }); self.scroll = 0; }
     pub fn set_status(&mut self, provider: &str, model: &str) { self.status = format!("{provider} · {model}"); }
+    pub fn set_notice(&mut self, notice: &str) { self.status = notice.to_string(); }
+    pub fn clear_messages(&mut self) { self.messages.clear(); self.scroll = 0; }
 
     pub fn stream(&mut self, receiver: std::sync::mpsc::Receiver<String>) -> Result<()> {
         let _guard = TerminalGuard::enter()?;
