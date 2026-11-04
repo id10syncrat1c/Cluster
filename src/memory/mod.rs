@@ -406,7 +406,7 @@ mod tests {
 
         let backups = fs::read_dir(path.parent().unwrap())
             .unwrap()
-            .filter_map(Result::ok)
+            .filter_map(|entry| entry.ok())
             .map(|entry| entry.path())
             .filter(|entry| {
                 entry.file_name()
