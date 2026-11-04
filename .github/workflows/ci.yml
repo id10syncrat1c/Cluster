@@ -5,9 +5,13 @@ on:
     branches:
       - main
       - libra-v0.3.1
+      - libra-v0.4.0-native-tui
   pull_request:
     branches:
       - main
+
+permissions:
+  contents: write
 
 jobs:
   test:
@@ -15,4 +19,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all
+      - run: cargo fmt --all -- --check
       - run: cargo test --all-targets
+      - name: Commit generated formatting and lockfile
+        if: github.actor != 'github-actions[bot]'
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock src
+            git commit -m "Update Cargo.lock for Libra 0.4"
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi

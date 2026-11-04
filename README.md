@@ -1,6 +1,6 @@
 # Cluster — Libra
 
-Libra is the CLI-first personal AI agent from Cluster. It supports OpenAI-compatible providers, persistent conversation history, and durable memory.
+Libra is the native terminal interface for Cluster, a lightweight personal AI agent runtime. It uses a custom cell-diff renderer with Crossterm input, streams provider output directly into the UI, and keeps conversation history and durable memory separate from the interface.
 
 ## Providers
 
@@ -21,7 +21,6 @@ The default local llama.cpp endpoint is `http://127.0.0.1:8080/v1/chat/completio
 - `/models` refresh the current provider's model list
 - `/model` show the current model
 - `/model <id>` change the model
-- `/thinking` toggle the live activity indicator
 - `/clear` clear conversation history
 - `/memory` show memory status
 - `/memory add <text>` save durable memory
@@ -32,4 +31,4 @@ The default local llama.cpp endpoint is `http://127.0.0.1:8080/v1/chat/completio
 
 Configuration is stored at `~/.config/cluster/config.toml` (or under `$XDG_CONFIG_HOME`). Conversation memory remains separate at `~/.local/share/cluster/memory.json` (or under `$XDG_DATA_HOME`).
 
-The live speed gauge is an estimate based on streamed output characters (approximately four characters per token). It is not tokenizer-exact. The activity indicator reports generation activity, not private model reasoning.
+The terminal UI supports multiline input with Shift+Enter, message scrolling with PageUp/PageDown, and Ctrl+C or Esc to exit. Completion speed is estimated from output characters (approximately four characters per token), so it is not tokenizer-exact.
