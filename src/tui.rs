@@ -9,7 +9,7 @@ use crossterm::{
 use std::io::{self, Write};
 use std::time::Duration;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Cell { ch: char, style: u8 }
 impl Default for Cell { fn default() -> Self { Self { ch: ' ', style: 0 } } }
 
