@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - libra-v0.3.1
+      - libra-v0.4.0-native-tui
   pull_request:
     branches:
       - main
@@ -15,4 +16,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
       - run: cargo test --all-targets
