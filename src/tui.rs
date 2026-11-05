@@ -76,7 +76,7 @@ impl Tui {
     pub fn input(&mut self, prompt: Option<&str>) -> Result<Option<String>> {
         let _guard = TerminalGuard::enter()?;
         self.status = prompt
-            .unwrap_or("Enter send · Shift+Enter newline · /help")
+            .unwrap_or("Enter send · Ctrl+N newline · /help")
             .to_string();
         self.input.clear();
         self.cursor = 0;
@@ -90,7 +90,7 @@ impl Tui {
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(None);
                         }
-                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             self.input.insert(self.cursor, '\n');
                             self.cursor += 1;
                         }
@@ -114,28 +114,22 @@ impl Tui {
                         KeyCode::Left if self.cursor > 0 => self.cursor -= 1,
                         KeyCode::Right if self.cursor < self.input.len() => self.cursor += 1,
                         KeyCode::Home => {
-                            self.cursor = self
-                                .input
+                            self.cursor = self.input[..self.cursor]
                                 .iter()
                                 .rposition(|c| *c == '\n')
-                                .map_or(0, |i| i + 1)
+                                .map_or(0, |i| i + 1);
                         }
                         KeyCode::End => {
-                            self.cursor = self
-                                .input
+                            self.cursor += self.input[self.cursor..]
                                 .iter()
                                 .position(|c| *c == '\n')
-                                .map_or(self.input.len(), |i| i)
+                                .unwrap_or(self.input.len() - self.cursor);
                         }
                         KeyCode::PageUp => {
-                            self.scroll = self
-                                .scroll
-                                .saturating_add(self.height.saturating_sub(5) as usize)
+                            self.scroll = self.scroll.saturating_add(self.page_size());
                         }
                         KeyCode::PageDown => {
-                            self.scroll = self
-                                .scroll
-                                .saturating_sub(self.height.saturating_sub(5) as usize)
+                            self.scroll = self.scroll.saturating_sub(self.page_size());
                         }
                         _ => {}
                     },
@@ -166,7 +160,7 @@ impl Tui {
             role: 1,
             content: String::new(),
         });
-        self.status = "Generating · PgUp/PgDn scroll".into();
+        self.status = "Generating · PgUp/PgDn to scroll".into();
         loop {
             match receiver.recv_timeout(Duration::from_millis(35)) {
                 Ok(chunk) => {
@@ -182,14 +176,10 @@ impl Tui {
                             Event::Resize(w, h) => self.resize(w, h),
                             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                                 KeyCode::PageUp => {
-                                    self.scroll = self
-                                        .scroll
-                                        .saturating_add(self.height.saturating_sub(5) as usize)
+                                    self.scroll = self.scroll.saturating_add(self.page_size())
                                 }
                                 KeyCode::PageDown => {
-                                    self.scroll = self
-                                        .scroll
-                                        .saturating_sub(self.height.saturating_sub(5) as usize)
+                                    self.scroll = self.scroll.saturating_sub(self.page_size())
                                 }
                                 _ => {}
                             },
@@ -199,8 +189,12 @@ impl Tui {
                 }
             }
         }
-        self.status = "Response complete · Enter to continue".into();
+        self.status = "Response complete".into();
         self.render()
+    }
+
+    fn page_size(&self) -> usize {
+        self.height.saturating_sub(7).max(1) as usize
     }
 
     fn resize(&mut self, width: u16, height: u16) {
@@ -216,11 +210,13 @@ impl Tui {
         ];
         self.current = vec![Cell::default(); size];
     }
+
     fn put(&mut self, x: usize, y: usize, ch: char, style: u8) {
         if x < self.width as usize && y < self.height as usize {
             self.current[y * self.width as usize + x] = Cell { ch, style };
         }
     }
+
     fn text(&mut self, x: usize, y: usize, value: &str, style: u8, max: usize) {
         for (offset, ch) in value.chars().take(max).enumerate() {
             if ch == '\n' {
@@ -229,49 +225,104 @@ impl Tui {
             self.put(x + offset, y, ch, style);
         }
     }
+
+    fn clean_markdown(line: &str) -> String {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        let mut value = trimmed.replace("**", "").replace("__", "").replace('`', "");
+        if let Some(rest) = value.strip_prefix("## ") {
+            value = format!("▌ {rest}");
+        } else if let Some(rest) = value.strip_prefix("# ") {
+            value = format!("▌ {rest}");
+        } else if let Some(rest) = value.strip_prefix("- ") {
+            value = format!("• {rest}");
+        } else if let Some(rest) = value.strip_prefix("* ") {
+            value = format!("• {rest}");
+        }
+        format!("{}{}", " ".repeat(indent.min(4)), value)
+    }
+
     fn lines(&self, width: usize) -> Vec<(u8, String)> {
         let mut lines = Vec::new();
-        for message in &self.messages {
-            let prefix = if message.role == 0 { "you  " } else { "ai   " };
-            let mut line = String::new();
-            let mut count = 0usize;
-            for word in message.content.split_inclusive(char::is_whitespace) {
-                for ch in word.chars() {
-                    if ch == '\n' {
-                        lines.push((message.role, format!("{prefix}{line}")));
-                        line.clear();
-                        count = 0;
-                    } else {
-                        if count >= width.saturating_sub(prefix.len()).max(1) {
+        for (index, message) in self.messages.iter().enumerate() {
+            let label = if message.role == 0 { "you  " } else { "ai   " };
+            let continuation = "     ";
+            let mut first = true;
+            for raw in message.content.lines() {
+                let cleaned = Self::clean_markdown(raw);
+                if cleaned.is_empty() {
+                    lines.push((2, String::new()));
+                    first = false;
+                    continue;
+                }
+                let words = cleaned.split_whitespace();
+                let mut line = String::new();
+                let mut prefix = label;
+                for word in words {
+                    let available = width.saturating_sub(prefix.chars().count()).max(1);
+                    let mut remaining = word.chars().collect::<Vec<_>>();
+                    while !remaining.is_empty() {
+                        let room = available
+                            .saturating_sub(line.chars().count() + usize::from(!line.is_empty()));
+                        if room == 0 {
                             lines.push((message.role, format!("{prefix}{line}")));
+                            prefix = continuation;
                             line.clear();
-                            count = 0;
+                            continue;
                         }
-                        line.push(ch);
-                        count += 1;
+                        if remaining.len() > room {
+                            if !line.is_empty() {
+                                lines.push((message.role, format!("{prefix}{line}")));
+                                prefix = continuation;
+                                line.clear();
+                            } else {
+                                let chunk = remaining.drain(..room).collect::<String>();
+                                lines.push((message.role, format!("{prefix}{chunk}")));
+                                prefix = continuation;
+                            }
+                        } else {
+                            if !line.is_empty() {
+                                line.push(' ');
+                            }
+                            line.push_str(&remaining.drain(..).collect::<String>());
+                        }
+                    }
+                    if !line.is_empty() && line.chars().count() >= available {
+                        lines.push((message.role, format!("{prefix}{line}")));
+                        prefix = continuation;
+                        line.clear();
                     }
                 }
+                if !line.is_empty() {
+                    lines.push((message.role, format!("{prefix}{line}")));
+                } else if first && message.content.is_empty() {
+                    lines.push((message.role, label.trim_end().to_string()));
+                }
+                first = false;
             }
-            if !line.is_empty() || message.content.is_empty() {
-                lines.push((message.role, format!("{prefix}{line}")));
+            if index + 1 < self.messages.len() {
+                lines.push((2, String::new()));
             }
-            lines.push((2, String::new()));
         }
         lines
     }
+
     fn render(&mut self) -> Result<()> {
         let width = self.width as usize;
         let height = self.height as usize;
         self.current.fill(Cell::default());
         self.text(1, 0, " LIBRA / CLUSTER", 1, width.saturating_sub(2));
         let status = self.status.clone();
-        let sx = width.saturating_sub(status.chars().count() + 2);
+        let status_len = status.chars().count().min(width.saturating_sub(20));
+        let sx = width.saturating_sub(status_len + 2);
         self.text(sx, 0, &status, 2, width.saturating_sub(sx));
         for x in 0..width {
             self.put(x, 1, '─', 3);
         }
-        if height > 4 {
-            let visible = height - 5;
+
+        let input_top = height.saturating_sub(5);
+        if input_top > 2 {
+            let visible = input_top - 2;
             let lines = self.lines(width.saturating_sub(4));
             let end = lines.len().saturating_sub(self.scroll);
             let start = end.saturating_sub(visible);
@@ -291,27 +342,37 @@ impl Tui {
                 );
             }
         }
-        let cy = height.saturating_sub(3);
+
         for x in 0..width {
-            self.put(x, cy, '─', 3);
+            self.put(x, input_top, '─', 3);
         }
-        self.text(1, cy + 1, "› ", 1, 2);
         let input = self.input.iter().collect::<String>();
-        let max = width.saturating_sub(4);
-        let input_start = self.cursor.saturating_sub(max);
-        let visible = input
-            .chars()
-            .skip(input_start)
-            .take(max)
-            .collect::<String>();
-        self.text(3, cy + 1, &visible, 0, max);
+        let input_lines = input.split('\n').collect::<Vec<_>>();
+        let visible_rows = height.saturating_sub(input_top + 2).max(1);
+        let first_line = input_lines.len().saturating_sub(visible_rows);
+        for (row, line) in input_lines.iter().skip(first_line).enumerate() {
+            self.text(2, input_top + 1 + row, line, 0, width.saturating_sub(4));
+        }
         self.text(
             1,
             height.saturating_sub(1),
-            "Shift+Enter newline · PgUp/PgDn scroll · Ctrl+C exit",
+            "Ctrl+N newline · Enter send · PgUp/PgDn scroll · Ctrl+C exit",
             2,
             width.saturating_sub(2),
         );
+
+        let cursor_line = self.input[..self.cursor]
+            .iter()
+            .filter(|c| **c == '\n')
+            .count();
+        let cursor_col = self.input[..self.cursor]
+            .iter()
+            .rev()
+            .take_while(|c| **c != '\n')
+            .count();
+        let visible_cursor_line = cursor_line.saturating_sub(first_line);
+        let cursor_x = 2 + cursor_col.min(width.saturating_sub(3));
+        let cursor_y = input_top + 1 + visible_cursor_line;
         let mut stdout = io::stdout();
         for y in 0..height {
             let mut x = 0usize;
@@ -346,13 +407,12 @@ impl Tui {
                 }
             }
         }
-        let cursor_x = 3usize.saturating_add(self.cursor.saturating_sub(input_start));
         queue!(
             stdout,
             ResetColor,
             MoveTo(
                 cursor_x.min(width.saturating_sub(1)) as u16,
-                cy.saturating_add(1) as u16
+                cursor_y.min(height.saturating_sub(2)) as u16
             ),
             Show
         )?;
@@ -380,13 +440,20 @@ mod tests {
     }
 
     #[test]
-    fn wraps_messages_to_the_available_width() {
+    fn wraps_messages_and_indents_continuation_lines() {
         let mut tui = test_tui();
         tui.add_message(0, "abcdefghijk".into());
         let lines = tui.lines(9);
         assert_eq!(lines[0], (0, "you  abcd".into()));
-        assert_eq!(lines[1], (0, "you  efgh".into()));
-        assert_eq!(lines[2], (0, "you  ijk".into()));
+        assert_eq!(lines[1], (0, "     efgh".into()));
+        assert_eq!(lines[2], (0, "     ijk".into()));
+    }
+
+    #[test]
+    fn markdown_markers_are_cleaned_for_terminal_display() {
+        assert_eq!(Tui::clean_markdown("**A heading**"), "A heading");
+        assert_eq!(Tui::clean_markdown("- A list item"), "• A list item");
+        assert_eq!(Tui::clean_markdown("## Section"), "▌ Section");
     }
 
     #[test]
