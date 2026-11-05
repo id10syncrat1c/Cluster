@@ -57,7 +57,13 @@ impl Tui {
         Ok(Self {
             width,
             height,
-            previous: vec![Cell { ch: '\0', style: 255 }; size],
+            previous: vec![
+                Cell {
+                    ch: '\0',
+                    style: 255
+                };
+                size
+            ],
             current: vec![Cell::default(); size],
             messages: Vec::new(),
             input: Vec::new(),
@@ -150,7 +156,10 @@ impl Tui {
 
     pub fn stream(&mut self, receiver: std::sync::mpsc::Receiver<String>) -> Result<()> {
         let _guard = TerminalGuard::enter()?;
-        self.messages.push(Message { role: 1, content: String::new() });
+        self.messages.push(Message {
+            role: 1,
+            content: String::new(),
+        });
         self.status = "Generating · PgUp/PgDn to scroll".into();
         loop {
             match receiver.recv_timeout(Duration::from_millis(35)) {
@@ -166,8 +175,12 @@ impl Tui {
                         match event::read()? {
                             Event::Resize(w, h) => self.resize(w, h),
                             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                                KeyCode::PageUp => self.scroll = self.scroll.saturating_add(self.page_size()),
-                                KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(self.page_size()),
+                                KeyCode::PageUp => {
+                                    self.scroll = self.scroll.saturating_add(self.page_size())
+                                }
+                                KeyCode::PageDown => {
+                                    self.scroll = self.scroll.saturating_sub(self.page_size())
+                                }
                                 _ => {}
                             },
                             _ => {}
@@ -188,7 +201,13 @@ impl Tui {
         self.width = width.max(1);
         self.height = height.max(1);
         let size = self.width as usize * self.height as usize;
-        self.previous = vec![Cell { ch: '\0', style: 255 }; size];
+        self.previous = vec![
+            Cell {
+                ch: '\0',
+                style: 255
+            };
+            size
+        ];
         self.current = vec![Cell::default(); size];
     }
 
@@ -200,7 +219,9 @@ impl Tui {
 
     fn text(&mut self, x: usize, y: usize, value: &str, style: u8, max: usize) {
         for (offset, ch) in value.chars().take(max).enumerate() {
-            if ch == '\n' { break; }
+            if ch == '\n' {
+                break;
+            }
             self.put(x + offset, y, ch, style);
         }
     }
@@ -208,10 +229,7 @@ impl Tui {
     fn clean_markdown(line: &str) -> String {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
-        let mut value = trimmed
-            .replace("**", "")
-            .replace("__", "")
-            .replace('`', "");
+        let mut value = trimmed.replace("**", "").replace("__", "").replace('`', "");
         if let Some(rest) = value.strip_prefix("## ") {
             value = format!("▌ {rest}");
         } else if let Some(rest) = value.strip_prefix("# ") {
@@ -244,7 +262,8 @@ impl Tui {
                     let available = width.saturating_sub(prefix.chars().count()).max(1);
                     let mut remaining = word.chars().collect::<Vec<_>>();
                     while !remaining.is_empty() {
-                        let room = available.saturating_sub(line.chars().count() + usize::from(!line.is_empty()));
+                        let room = available
+                            .saturating_sub(line.chars().count() + usize::from(!line.is_empty()));
                         if room == 0 {
                             lines.push((message.role, format!("{prefix}{line}")));
                             prefix = continuation;
@@ -262,7 +281,9 @@ impl Tui {
                                 prefix = continuation;
                             }
                         } else {
-                            if !line.is_empty() { line.push(' '); }
+                            if !line.is_empty() {
+                                line.push(' ');
+                            }
                             line.push_str(&remaining.drain(..).collect::<String>());
                         }
                     }
@@ -295,7 +316,9 @@ impl Tui {
         let status_len = status.chars().count().min(width.saturating_sub(20));
         let sx = width.saturating_sub(status_len + 2);
         self.text(sx, 0, &status, 2, width.saturating_sub(sx));
-        for x in 0..width { self.put(x, 1, '─', 3); }
+        for x in 0..width {
+            self.put(x, 1, '─', 3);
+        }
 
         let input_top = height.saturating_sub(5);
         if input_top > 2 {
@@ -304,11 +327,25 @@ impl Tui {
             let end = lines.len().saturating_sub(self.scroll);
             let start = end.saturating_sub(visible);
             for (row, (role, line)) in lines[start..end].iter().enumerate() {
-                self.text(2, row + 2, line, if *role == 0 { 1 } else if *role == 2 { 3 } else { 0 }, width.saturating_sub(4));
+                self.text(
+                    2,
+                    row + 2,
+                    line,
+                    if *role == 0 {
+                        1
+                    } else if *role == 2 {
+                        3
+                    } else {
+                        0
+                    },
+                    width.saturating_sub(4),
+                );
             }
         }
 
-        for x in 0..width { self.put(x, input_top, '─', 3); }
+        for x in 0..width {
+            self.put(x, input_top, '─', 3);
+        }
         let input = self.input.iter().collect::<String>();
         let input_lines = input.split('\n').collect::<Vec<_>>();
         let visible_rows = height.saturating_sub(input_top + 2).max(1);
@@ -316,10 +353,23 @@ impl Tui {
         for (row, line) in input_lines.iter().skip(first_line).enumerate() {
             self.text(2, input_top + 1 + row, line, 0, width.saturating_sub(4));
         }
-        self.text(1, height.saturating_sub(1), "Ctrl+N newline · Enter send · PgUp/PgDn scroll · Ctrl+C exit", 2, width.saturating_sub(2));
+        self.text(
+            1,
+            height.saturating_sub(1),
+            "Ctrl+N newline · Enter send · PgUp/PgDn scroll · Ctrl+C exit",
+            2,
+            width.saturating_sub(2),
+        );
 
-        let cursor_line = self.input[..self.cursor].iter().filter(|c| **c == '\n').count();
-        let cursor_col = self.input[..self.cursor].iter().rev().take_while(|c| **c != '\n').count();
+        let cursor_line = self.input[..self.cursor]
+            .iter()
+            .filter(|c| **c == '\n')
+            .count();
+        let cursor_col = self.input[..self.cursor]
+            .iter()
+            .rev()
+            .take_while(|c| **c != '\n')
+            .count();
         let visible_cursor_line = cursor_line.saturating_sub(first_line);
         let cursor_x = 2 + cursor_col.min(width.saturating_sub(3));
         let cursor_y = input_top + 1 + visible_cursor_line;
@@ -328,24 +378,44 @@ impl Tui {
             let mut x = 0usize;
             while x < width {
                 let i = y * width + x;
-                if self.current[i] == self.previous[i] { x += 1; continue; }
+                if self.current[i] == self.previous[i] {
+                    x += 1;
+                    continue;
+                }
                 let style = self.current[i].style;
                 queue!(stdout, MoveTo(x as u16, y as u16))?;
                 match style {
-                    1 => queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }))?,
+                    1 => queue!(
+                        stdout,
+                        SetForegroundColor(Color::Rgb {
+                            r: 200,
+                            g: 255,
+                            b: 0
+                        })
+                    )?,
                     2 | 3 => queue!(stdout, SetForegroundColor(Color::DarkGrey))?,
                     _ => queue!(stdout, SetForegroundColor(Color::White))?,
                 }
                 while x < width {
                     let cell = self.current[y * width + x];
-                    if cell == self.previous[y * width + x] || cell.style != style { break; }
+                    if cell == self.previous[y * width + x] || cell.style != style {
+                        break;
+                    }
                     queue!(stdout, Print(cell.ch))?;
                     self.previous[y * width + x] = cell;
                     x += 1;
                 }
             }
         }
-        queue!(stdout, ResetColor, MoveTo(cursor_x.min(width.saturating_sub(1)) as u16, cursor_y.min(height.saturating_sub(2)) as u16), Show)?;
+        queue!(
+            stdout,
+            ResetColor,
+            MoveTo(
+                cursor_x.min(width.saturating_sub(1)) as u16,
+                cursor_y.min(height.saturating_sub(2)) as u16
+            ),
+            Show
+        )?;
         stdout.flush()?;
         Ok(())
     }
@@ -357,10 +427,15 @@ mod tests {
 
     fn test_tui() -> Tui {
         Tui {
-            width: 40, height: 12,
-            previous: Vec::new(), current: Vec::new(),
-            messages: Vec::new(), input: Vec::new(),
-            cursor: 0, scroll: 0, status: String::new(),
+            width: 40,
+            height: 12,
+            previous: Vec::new(),
+            current: Vec::new(),
+            messages: Vec::new(),
+            input: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+            status: String::new(),
         }
     }
 
