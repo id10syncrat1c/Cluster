@@ -241,15 +241,30 @@ impl Tui {
                 let mut line = String::new();
                 let mut prefix = label;
                 for word in words {
-                    let available = width.saturating_sub(prefix.len()).max(1);
-                    let extra = if line.is_empty() { word.len() } else { word.len() + 1 };
-                    if !line.is_empty() && line.len() + extra > available {
+                    let available = width.saturating_sub(prefix.chars().count()).max(1);
+                    let mut remaining = word.chars().collect::<Vec<_>>();
+                    while !remaining.is_empty() {
+                        let room = available.saturating_sub(line.chars().count() + usize::from(!line.is_empty()));
+                        if room == 0 {
+                            lines.push((message.role, format!("{prefix}{line}")));
+                            prefix = continuation;
+                            line.clear();
+                            continue;
+                        }
+                        if remaining.len() > room && line.is_empty() {
+                            let chunk = remaining.drain(..room).collect::<String>();
+                            lines.push((message.role, format!("{prefix}{chunk}")));
+                            prefix = continuation;
+                        } else {
+                            if !line.is_empty() { line.push(' '); }
+                            line.push_str(&remaining.drain(..).collect::<String>());
+                        }
+                    }
+                    if !line.is_empty() && line.chars().count() >= available {
                         lines.push((message.role, format!("{prefix}{line}")));
                         prefix = continuation;
                         line.clear();
                     }
-                    if !line.is_empty() { line.push(' '); }
-                    line.push_str(word);
                 }
                 if !line.is_empty() {
                     lines.push((message.role, format!("{prefix}{line}")));
