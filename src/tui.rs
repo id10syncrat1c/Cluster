@@ -251,10 +251,16 @@ impl Tui {
                             line.clear();
                             continue;
                         }
-                        if remaining.len() > room && line.is_empty() {
-                            let chunk = remaining.drain(..room).collect::<String>();
-                            lines.push((message.role, format!("{prefix}{chunk}")));
-                            prefix = continuation;
+                        if remaining.len() > room {
+                            if !line.is_empty() {
+                                lines.push((message.role, format!("{prefix}{line}")));
+                                prefix = continuation;
+                                line.clear();
+                            } else {
+                                let chunk = remaining.drain(..room).collect::<String>();
+                                lines.push((message.role, format!("{prefix}{chunk}")));
+                                prefix = continuation;
+                            }
                         } else {
                             if !line.is_empty() { line.push(' '); }
                             line.push_str(&remaining.drain(..).collect::<String>());
