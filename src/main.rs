@@ -480,56 +480,19 @@ async fn main() -> Result<()> {
     }
 
     let suggestions = load_suggestions();
-    let mut home_items = vec![("New chat".to_string(), true)];
-    for suggestion in &suggestions {
-        home_items.push((suggestion.clone(), true));
-    }
-    home_items.push(("Settings".to_string(), true));
-    home_items.push(("Switch session".to_string(), true));
-    home_items.push(("Changelogs".to_string(), true));
-    home_items.push(("Exit".to_string(), true));
-    let Some(home_choice) = ui.menu(&format!("Cluster\nRelease Libra V {}", env!("CARGO_PKG_VERSION")), &home_items)? else {
-        return Ok(());
-    };
-    let settings_index = 1 + suggestions.len();
-    let sessions_index = settings_index + 1;
-    let changelog_index = settings_index + 2;
-    let exit_index = settings_index + 3;
-    let mut next_input = None;
-    match home_choice {
-        0 => {
-            sessions.create(config.provider.clone())?;
-            messages.clear();
-            ui.clear_messages();
-            let placeholders = [
-                "What are we building today?",
-                "Describe the problem. We can work through it.",
-                "Ask Cluster to inspect, explain, or create something.",
-                "Start with an idea, even if it is rough.",
-                "What needs fixing?",
-            ];
-            let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-            let placeholder = placeholders[(tick as usize) % placeholders.len()];
-            next_input = ui.input(Some(placeholder))?;
-        }
-        choice if choice <= suggestions.len() => {
-            sessions.create(config.provider.clone())?;
-            messages.clear();
-            ui.clear_messages();
-            next_input = Some(suggestions[choice - 1].clone());
-        },
-        choice if choice == settings_index => {
-            settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut sessions, &mut ui).await?;
-        }
-        choice if choice == sessions_index => switch_session(&mut ui, &mut sessions, &mut config, &mut messages)?,
-        choice if choice == changelog_index => {
-            if let Err(error) = show_changelog(&client, &mut ui).await {
-                ui.set_notice(&format!("Could not fetch changelog: {error}"));
-            }
-        }
-        choice if choice == exit_index => return Ok(()),
-        _ => {}
-    }
+    let placeholders = [
+        "Ask anything…",
+        "What are we building today?",
+        "Describe the problem you want to solve.",
+        "Ask Cluster to inspect, explain, or create something.",
+        "What needs fixing?",
+    ];
+    let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    let placeholder = placeholders[(tick as usize) % placeholders.len()];
+    sessions.create(config.provider.clone())?;
+    messages.clear();
+    ui.clear_messages();
+    let mut next_input = ui.input(Some(placeholder))?;
 
     loop {
         let Some(input) = (if let Some(value) = next_input.take() { Some(value) } else { ui.input(None)? }) else {
@@ -544,6 +507,43 @@ async fn main() -> Result<()> {
         }
         if input == "/help" {
             print_help();
+            continue;
+        }
+        if input == "/commands" {
+            let commands = vec![
+                ("New chat".to_string(), true),
+                ("Switch session".to_string(), true),
+                ("Provider and model".to_string(), true),
+                ("Settings".to_string(), true),
+                ("Changelogs".to_string(), true),
+                ("Help".to_string(), true),
+                ("Exit".to_string(), true),
+            ];
+            match ui.menu("Commands", &commands)? {
+                Some(0) => {
+                    sessions.create(config.provider.clone())?;
+                    messages.clear();
+                    ui.clear_messages();
+                }
+                Some(1) => switch_session(&mut ui, &mut sessions, &mut config, &mut messages)?,
+                Some(2) => {
+                    if let Err(error) = choose_provider(&client, &mut config, &secrets).await {
+                        ui.set_notice(&format!("Provider selection failed: {error}"));
+                    } else {
+                        sessions.set_provider(config.provider.clone())?;
+                        ui.set_status(&config.provider.name, &config.provider.model);
+                    }
+                }
+                Some(3) => settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut sessions, &mut ui).await?,
+                Some(4) => {
+                    if let Err(error) = show_changelog(&client, &mut ui).await {
+                        ui.set_notice(&format!("Could not fetch changelog: {error}"));
+                    }
+                }
+                Some(5) => print_help(),
+                Some(6) => break,
+                _ => {}
+            }
             continue;
         }
         if input == "/sessions" {
