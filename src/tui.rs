@@ -235,6 +235,15 @@ impl Tui {
     }
 
     pub fn add_message(&mut self, role: u8, content: String) {
+        self.add_message_with_preview(role, content, true);
+    }
+
+    pub fn add_message_with_preview(&mut self, role: u8, content: String, code_depth_preview: bool) {
+        let content = if role == 1 && !code_depth_preview {
+            Self::compact_code_preview(&content)
+        } else {
+            content
+        };
         self.messages.push(Message { role, content });
         self.scroll = 0;
     }
