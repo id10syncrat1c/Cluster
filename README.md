@@ -18,7 +18,7 @@ Credentials entered in Settings are stored in `secrets.enc`, not in the readable
 
 ## Interface
 
-- Main menu suggestions are loaded from `data/suggestions.txt`.
+- Main menu suggestions are loaded from `~/.config/cluster/suggestions.txt` when present, otherwise from the bundled `data/suggestions.txt` file.
 - `Alt+E` opens Settings.
 - `Alt+T` switches sessions.
 - `Enter` sends a message; `Shift+Enter` or `Ctrl+N` inserts a newline.
