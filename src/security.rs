@@ -31,34 +31,37 @@ impl SecretStore {
         print!("{prompt}");
         io::stdout().flush()?;
         terminal::enable_raw_mode()?;
-        let mut password = String::new();
-        loop {
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Enter => break,
-                    KeyCode::Esc => {
-                        password.clear();
-                        break;
-                    }
-                    KeyCode::Backspace => {
-                        password.pop();
-                        print!("\x08 \x08");
-                        io::stdout().flush()?;
-                    }
-                    KeyCode::Char(_) if !key.modifiers.is_empty() => {}
-                    KeyCode::Char(c) => {
-                        password.push(c);
-                        print!("*");
-                        io::stdout().flush()?;
-                    }
+        let result = (|| -> Result<String> {
+            let mut password = String::new();
+            loop {
+                match event::read()? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                        KeyCode::Enter => break,
+                        KeyCode::Esc => {
+                            password.clear();
+                            break;
+                        }
+                        KeyCode::Backspace => {
+                            password.pop();
+                            print!("\x08 \x08");
+                            io::stdout().flush()?;
+                        }
+                        KeyCode::Char(_) if !key.modifiers.is_empty() => {}
+                        KeyCode::Char(c) => {
+                            password.push(c);
+                            print!("*");
+                            io::stdout().flush()?;
+                        }
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
+                }
             }
-        }
+            Ok(password)
+        })();
         terminal::disable_raw_mode()?;
         println!();
-        Ok(password)
+        result
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
@@ -109,6 +112,7 @@ impl SecretStore {
         let mut decoded = plaintext.to_vec();
         let store = serde_json::from_slice(&decoded).context("Credential vault contents are invalid")?;
         decoded.fill(0);
+        ciphertext.fill(0);
         Ok(store)
     }
 
