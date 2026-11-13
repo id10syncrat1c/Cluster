@@ -89,10 +89,17 @@ impl Tui {
         };
         loop {
             let mut stdout = io::stdout();
+            let (screen_width, screen_height) = terminal::size()?;
+            let title_rows = title.lines().count();
+            let first_item_row = title_rows + 2;
+            let visible_rows = screen_height.saturating_sub(first_item_row as u16 + 2).max(1) as usize;
+            let start = selected.saturating_sub(visible_rows.saturating_sub(1));
+            let end = (start + visible_rows).min(items.len());
             execute!(stdout, terminal::Clear(ClearType::All), MoveTo(0, 0))?;
             queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  {title}\n")))?;
             queue!(stdout, SetForegroundColor(Color::DarkGrey), Print("  Use ↑/↓ to navigate · Enter to select · Esc to go back\n\n"))?;
-            for (index, (label, enabled)) in items.iter().enumerate() {
+            for index in start..end {
+                let (label, enabled) = &items[index];
                 if !enabled {
                     queue!(stdout, SetForegroundColor(Color::DarkGrey), Print(format!("  {label}\n")))?;
                 } else if index == selected {
@@ -112,16 +119,14 @@ impl Tui {
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
                     Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-                        let title_rows = title.lines().count();
-                        let first_item_row = title_rows + 2;
-                        let (width, height) = terminal::size()?;
+                        let (width, height) = (screen_width, screen_height);
                         if title.contains("Release Libra") && mouse.row == height.saturating_sub(1) && mouse.column < 14 {
                             if let Some(index) = items.iter().position(|item| item.0 == "Changelogs" && item.1) {
                                 return Ok(Some(index));
                             }
                         }
                         if mouse.row >= first_item_row as u16 {
-                            let index = (mouse.row - first_item_row as u16) as usize;
+                            let index = start + (mouse.row - first_item_row as u16) as usize;
                             if index < items.len() && items[index].1 {
                                 return Ok(Some(index));
                             }
