@@ -2,6 +2,7 @@ mod config;
 mod memory;
 mod provider;
 mod security;
+mod sessions;
 mod tui;
 
 use anyhow::{Context, Result, anyhow};
@@ -10,6 +11,7 @@ use memory::MemoryStore;
 use provider::{known_providers, list_models, stream_message};
 use reqwest::Client;
 use security::SecretStore;
+use sessions::SessionStore;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Write};
@@ -169,6 +171,7 @@ async fn settings_menu(
     config: &mut AppConfig,
     secrets: &mut SecretStore,
     vault_password: &mut Option<String>,
+    sessions: &mut SessionStore,
     ui: &mut Tui,
 ) -> Result<()> {
     loop {
@@ -227,6 +230,7 @@ async fn settings_menu(
                 config.providers.push(provider.clone());
                 config.provider = provider;
                 config.save()?;
+                sessions.set_provider(config.provider.clone())?;
                 ui.set_status(&config.provider.name, &config.provider.model);
             }
             "Manage skills" => {
@@ -352,6 +356,7 @@ async fn settings_menu(
                 config.provider = provider;
                 if !model.is_empty() { config.provider.model = model; }
                 config.save()?;
+                sessions.set_provider(config.provider.clone())?;
                 ui.set_status(&config.provider.name, &config.provider.model);
             }
         }
@@ -392,6 +397,28 @@ fn print_help() {
 }
 
 #[tokio::main]
+fn switch_session(ui: &mut Tui, sessions: &mut SessionStore, config: &mut AppConfig, messages: &mut Vec<Value>) -> Result<()> {
+    let items = sessions.sessions().iter().enumerate().map(|(index, session)| {
+        let active = session.id == sessions.active().id;
+        (format!("{} · {} · {}{}", index + 1, session.name, session.provider.model, if active { " · active" } else { "" }), true)
+    }).collect::<Vec<_>>();
+    if let Some(index) = ui.menu("Switch session", &items)? {
+        sessions.switch(index)?;
+        config.provider = sessions.active().provider.clone();
+        config.save()?;
+        messages.clear();
+        ui.clear_messages();
+        for turn in &sessions.active().history {
+            messages.push(json!({"role":"user","content":turn.user_message}));
+            messages.push(json!({"role":"assistant","content":turn.assistant_response}));
+            ui.add_message(0, turn.user_message.clone());
+            ui.add_message(1, turn.assistant_response.clone());
+        }
+        ui.set_status(&config.provider.name, &config.provider.model);
+    }
+    Ok(())
+}
+
 async fn main() -> Result<()> {
     let mut config = AppConfig::load()?;
     let vault_path = SecretStore::path()?;
@@ -409,33 +436,18 @@ async fn main() -> Result<()> {
         .user_agent(concat!("Cluster/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let mut memory = MemoryStore::load()?;
+    let mut sessions = SessionStore::load(config.provider.clone())?;
+    config.provider = sessions.active().provider.clone();
+    config.save()?;
     let mut messages = Vec::new();
 
-    for turn in memory
-        .data
-        .history
-        .iter()
-        .rev()
-        .take(MAX_HISTORY / 2)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
+    for turn in sessions.active().history.iter().rev().take(MAX_HISTORY / 2).collect::<Vec<_>>().into_iter().rev() {
         messages.push(json!({"role": "user", "content": turn.user_message}));
         messages.push(json!({"role": "assistant", "content": turn.assistant_response}));
     }
 
     let mut ui = Tui::new(&config.provider.name, &config.provider.model)?;
-    for turn in memory
-        .data
-        .history
-        .iter()
-        .rev()
-        .take(MAX_HISTORY / 2)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
+    for turn in sessions.active().history.iter().rev().take(MAX_HISTORY / 2).collect::<Vec<_>>().into_iter().rev() {
         ui.add_message(0, turn.user_message.clone());
         ui.add_message(1, turn.assistant_response.clone());
     }
@@ -459,6 +471,9 @@ async fn main() -> Result<()> {
     let mut next_input = None;
     match home_choice {
         0 => {
+            sessions.create(config.provider.clone())?;
+            messages.clear();
+            ui.clear_messages();
             let placeholders = [
                 "What are we building today?",
                 "Describe the problem. We can work through it.",
@@ -472,9 +487,9 @@ async fn main() -> Result<()> {
         }
         choice if choice <= suggestions.len() => next_input = Some(suggestions[choice - 1].clone()),
         choice if choice == settings_index => {
-            settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut ui).await?;
+            settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut sessions, &mut ui).await?;
         }
-        choice if choice == sessions_index => ui.set_notice("Session switching is being implemented"),
+        choice if choice == sessions_index => switch_session(&mut ui, &mut sessions, &mut config, &mut messages)?,
         choice if choice == changelog_index => {
             if let Err(error) = show_changelog(&client, &mut ui).await {
                 ui.set_notice(&format!("Could not fetch changelog: {error}"));
@@ -497,6 +512,10 @@ async fn main() -> Result<()> {
         }
         if input == "/help" {
             print_help();
+            continue;
+        }
+        if input == "/sessions" {
+            switch_session(&mut ui, &mut sessions, &mut config, &mut messages)?;
             continue;
         }
         if input == "/settings" {
@@ -536,12 +555,14 @@ async fn main() -> Result<()> {
             if !model.trim().is_empty() {
                 config.provider.model = model.trim().to_owned();
                 config.save()?;
+                sessions.set_provider(config.provider.clone())?;
                 ui.set_status(&config.provider.name, &config.provider.model);
             }
             continue;
         }
         if input == "/clear" {
             memory.clear()?;
+            sessions.clear_active()?;
             messages.clear();
             ui.clear_messages();
             ui.set_notice("Conversation history cleared");
@@ -620,6 +641,7 @@ async fn main() -> Result<()> {
         match request.await.context("Provider task failed")? {
             Ok(result) => {
                 memory.add_turn(input.clone(), result.text.clone())?;
+                sessions.add_turn(input.clone(), result.text.clone())?;
                 messages.push(json!({"role": "user", "content": input}));
                 messages.push(json!({"role": "assistant", "content": result.text}));
                 if messages.len() > MAX_HISTORY {
