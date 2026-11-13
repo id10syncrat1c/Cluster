@@ -383,6 +383,8 @@ async fn show_changelog(client: &Client, ui: &mut Tui) -> Result<()> {
 
 fn print_help() {
     println!("  /help                 Show commands");
+    println!("  /settings             Open settings");
+    println!("  /sessions             Switch chat session");
     println!("  /provider             Choose provider and discover its models");
     println!("  /models               Refresh and list the current provider's models");
     println!("  /model                Show the current model");
@@ -485,7 +487,12 @@ async fn main() -> Result<()> {
             let placeholder = placeholders[(tick as usize) % placeholders.len()];
             next_input = ui.input(Some(placeholder))?;
         }
-        choice if choice <= suggestions.len() => next_input = Some(suggestions[choice - 1].clone()),
+        choice if choice <= suggestions.len() => {
+            sessions.create(config.provider.clone())?;
+            messages.clear();
+            ui.clear_messages();
+            next_input = Some(suggestions[choice - 1].clone());
+        },
         choice if choice == settings_index => {
             settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut sessions, &mut ui).await?;
         }
