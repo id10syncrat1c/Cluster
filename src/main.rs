@@ -372,7 +372,7 @@ async fn show_changelog(client: &Client, ui: &mut Tui) -> Result<()> {
         .split_once(&heading)
         .map(|(_, rest)| rest.split_once("\n## ").map_or(rest, |(section, _)| section))
         .unwrap_or(&body);
-    ui.add_message(1, format!("Changelog · Libra v{}\\n{}", env!("CARGO_PKG_VERSION"), section.trim()));
+    ui.add_message(1, format!("Changelog · Libra v{}\n{}", env!("CARGO_PKG_VERSION"), section.trim()));
     Ok(())
 }
 
@@ -449,7 +449,7 @@ async fn main() -> Result<()> {
     home_items.push(("Switch session".to_string(), true));
     home_items.push(("Changelogs".to_string(), true));
     home_items.push(("Exit".to_string(), true));
-    let Some(home_choice) = ui.menu(&format!("Cluster\\nRelease Libra v{}", env!("CARGO_PKG_VERSION")), &home_items)? else {
+    let Some(home_choice) = ui.menu(&format!("Cluster\nRelease Libra v{}", env!("CARGO_PKG_VERSION")), &home_items)? else {
         return Ok(());
     };
     let settings_index = 1 + suggestions.len();
@@ -485,7 +485,7 @@ async fn main() -> Result<()> {
     }
 
     loop {
-        let Some(input) = if let Some(value) = next_input.take() { Some(value) } else { ui.input(None)? } else {
+        let Some(input) = (if let Some(value) = next_input.take() { Some(value) } else { ui.input(None)? }) else {
             break;
         };
         if input.is_empty() {
