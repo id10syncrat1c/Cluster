@@ -590,21 +590,6 @@ impl Tui {
             let cursor_col = self.input.iter().take(self.cursor).count();
             cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
             cursor_y = box_y + 1;
-        }
-                self.text(box_x + 2, box_y + 1, &input, 0, box_width.saturating_sub(4));
-            }
-            self.text(box_x + box_width.saturating_sub(1), box_y + 1, "┃", 1, 1);
-            self.text(box_x, box_y + 2, &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
-            let status = format!("{} · {}", self.status, self.version);
-            let status_x = width.saturating_sub(status.chars().count() + 2);
-            self.text(status_x, height.saturating_sub(1), &status, 2, width.saturating_sub(status_x));
-            let tip = self.tip.clone();
-            self.text(2, height.saturating_sub(4), &tip, 2, width.saturating_sub(4));
-            let shortcuts = "Tab sessions   Ctrl+P commands";
-            self.text(width.saturating_sub(shortcuts.chars().count() + 2), height.saturating_sub(2), shortcuts, 2, width.saturating_sub(2));
-            let cursor_col = self.input.iter().take(self.cursor).count();
-            cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
-            cursor_y = box_y + 1;
         } else {
             self.text(1, 0, " LIBRA / CLUSTER", 1, width.saturating_sub(2));
             let status = self.status.clone();
