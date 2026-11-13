@@ -50,6 +50,7 @@ pub struct Tui {
     cursor: usize,
     scroll: usize,
     status: String,
+    placeholder: Option<String>,
 }
 impl Tui {
     pub fn new(provider: &str, model: &str) -> Result<Self> {
@@ -71,6 +72,7 @@ impl Tui {
             cursor: 0,
             scroll: 0,
             status: format!("{provider} · {model}"),
+            placeholder: None,
         })
     }
 
@@ -160,6 +162,7 @@ impl Tui {
         self.status = prompt
             .unwrap_or("Enter send · Ctrl+N newline · /help")
             .to_string();
+        self.placeholder = prompt.map(str::to_owned);
         self.input.clear();
         self.cursor = 0;
         loop {
@@ -182,6 +185,7 @@ impl Tui {
                             let value = self.input.iter().collect::<String>().trim().to_string();
                             self.input.clear();
                             self.cursor = 0;
+                            self.placeholder = None;
                             return Ok(Some(value));
                         }
                         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -434,8 +438,14 @@ impl Tui {
         let input_lines = input.split('\n').collect::<Vec<_>>();
         let visible_rows = height.saturating_sub(input_top + 2).max(1);
         let first_line = input_lines.len().saturating_sub(visible_rows);
-        for (row, line) in input_lines.iter().skip(first_line).enumerate() {
-            self.text(2, input_top + 1 + row, line, 0, width.saturating_sub(4));
+        if input.is_empty() {
+            if let Some(placeholder) = self.placeholder.clone() {
+                self.text(2, input_top + 1, &placeholder, 3, width.saturating_sub(4));
+            }
+        } else {
+            for (row, line) in input_lines.iter().skip(first_line).enumerate() {
+                self.text(2, input_top + 1 + row, line, 0, width.saturating_sub(4));
+            }
         }
         self.text(
             1,
