@@ -191,7 +191,7 @@ async fn settings_menu(
         }
         items.push(("Add local AI endpoint".to_string(), true));
         items.push(("Cluster settings".to_string(), false));
-        items.push((if config.show_thought_process { "Disable thought process display" } else { "Enable thought process display" }.to_string(), true));
+        items.push((if config.show_thought_process { "Disable thought process" } else { "Enable thought process" }.to_string(), true));
         items.push((if config.code_depth_preview { "Disable code-depth preview" } else { "Enable code-depth preview" }.to_string(), true));
         items.push((if config.password_lock_enabled { "Disable password lock" } else { "Enable password lock" }.to_string(), true));
         items.push(("Manage skills".to_string(), true));
@@ -309,7 +309,7 @@ async fn settings_menu(
                     }
                 }
             }
-            "Disable thought process display" | "Enable thought process display" => {
+            "Disable thought process" | "Enable thought process" => {
                 config.show_thought_process = !config.show_thought_process;
                 config.save()?;
             }
@@ -319,9 +319,26 @@ async fn settings_menu(
             }
             "Enable password lock" => enable_password_lock(config, secrets, vault_password)?,
             "Disable password lock" => {
-                config.password_lock_enabled = false;
-                config.save()?;
-                *vault_password = None;
+                if secrets.is_empty() {
+                    let vault = SecretStore::path()?;
+                    if vault.exists() { fs::remove_file(vault)?; }
+                    config.password_lock_enabled = false;
+                    config.save()?;
+                    *vault_password = None;
+                } else {
+                    ui.set_notice("Remove stored credentials before disabling the password lock");
+                }
+            }
+            "Manage stored credentials" => {
+                let keys = secrets.keys();
+                let options = keys.iter().map(|key| (key.clone(), true)).collect::<Vec<_>>();
+                if let Some(index) = ui.menu("Stored credentials", &options)? {
+                    let key = &keys[index];
+                    secrets.remove(key);
+                    if let Some(password) = vault_password.as_deref() {
+                        secrets.save(&SecretStore::path()?, password)?;
+                    }
+                }
             }
             "License" => ui.set_notice("Cluster is distributed under the license in LICENSE"),
             "Attribution" => ui.set_notice("Attribution details are maintained in the repository"),
