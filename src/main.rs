@@ -670,7 +670,7 @@ async fn main() -> Result<()> {
             )
             .await
         });
-        ui.stream(receiver, config.code_depth_preview)?;
+        ui.stream(receiver, config.code_depth_preview, config.show_thought_process)?;
         match request.await.context("Provider task failed")? {
             Ok(result) => {
                 memory.add_turn(input.clone(), result.text.clone())?;
