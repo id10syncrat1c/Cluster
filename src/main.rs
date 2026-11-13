@@ -139,6 +139,224 @@ async fn choose_provider(client: &Client, config: &mut AppConfig, secrets: &Secr
     Ok(())
 }
 
+async fn ask(ui: &mut Tui, prompt: &str) -> Result<String> {
+    Ok(ui.input(Some(prompt))?.unwrap_or_default().trim().to_owned())
+}
+
+fn enable_password_lock(
+    config: &mut AppConfig,
+    secrets: &SecretStore,
+    password: &mut Option<String>,
+) -> Result<()> {
+    let first = SecretStore::prompt_password("Set Cluster password: ")?;
+    if first.len() < 8 {
+        return Err(anyhow!("Password must contain at least 8 characters"));
+    }
+    let second = SecretStore::prompt_password("Confirm Cluster password: ")?;
+    if first != second {
+        return Err(anyhow!("Passwords do not match"));
+    }
+    secrets.save(&SecretStore::path()?, &first)?;
+    *password = Some(first);
+    config.password_lock_enabled = true;
+    config.save()?;
+    Ok(())
+}
+
+async fn settings_menu(
+    client: &Client,
+    config: &mut AppConfig,
+    secrets: &mut SecretStore,
+    vault_password: &mut Option<String>,
+    ui: &mut Tui,
+) -> Result<()> {
+    loop {
+        let mut items = vec![
+            ("Providers Configuration".to_string(), false),
+            ("Add provider".to_string(), true),
+        ];
+        let builtins = known_providers();
+        for provider in &builtins {
+            let current = provider.name == config.provider.name && provider.endpoint == config.provider.endpoint;
+            items.push((format!("{}{}", provider.name, if current { " · active" } else { "" }), true));
+        }
+        for provider in &config.providers {
+            let current = provider.name == config.provider.name && provider.endpoint == config.provider.endpoint;
+            items.push((format!("{}{}", provider.name, if current { " · active" } else { "" }), true));
+        }
+        items.push(("Local AI".to_string(), false));
+        items.push(("Add local AI endpoint".to_string(), true));
+        items.push(("Cluster settings".to_string(), false));
+        items.push((if config.show_thought_process { "Disable thought process display" } else { "Enable thought process display" }.to_string(), true));
+        items.push((if config.code_depth_preview { "Disable code-depth preview" } else { "Enable code-depth preview" }.to_string(), true));
+        items.push((if config.password_lock_enabled { "Disable password lock" } else { "Enable password lock" }.to_string(), true));
+        items.push(("Manage skills".to_string(), true));
+        items.push(("Manage MCP connectors".to_string(), true));
+        items.push(("Credits".to_string(), false));
+        items.push(("License".to_string(), true));
+        items.push(("Attribution".to_string(), true));
+        items.push(("Credits message".to_string(), true));
+
+        let Some(selected) = ui.menu("Cluster Settings", &items)? else { return Ok(()); };
+        match items[selected].0.as_str() {
+            "Add provider" | "Add local AI endpoint" => {
+                let name = ask(ui, "Provider name > ").await?;
+                if name.is_empty() { continue; }
+                let endpoint = ask(ui, "OpenAI-compatible chat completions URL > ").await?;
+                if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+                    ui.set_notice("Provider URL must start with http:// or https://");
+                    continue;
+                }
+                let model = ask(ui, "Default model ID > ").await?;
+                let token = ask(ui, "API token (leave blank if not required) > ").await?;
+                let provider = crate::config::ProviderConfig {
+                    name: name.clone(),
+                    endpoint,
+                    model: if model.is_empty() { "local-model".into() } else { model },
+                    api_key_env: String::new(),
+                };
+                if !token.is_empty() {
+                    if !config.password_lock_enabled {
+                        enable_password_lock(config, secrets, vault_password)?;
+                    }
+                    secrets.set(&name, token);
+                    secrets.save(&SecretStore::path()?, vault_password.as_deref().unwrap())?;
+                }
+                config.providers.retain(|item| item.name != name);
+                config.providers.push(provider.clone());
+                config.provider = provider;
+                config.save()?;
+                ui.set_status(&config.provider.name, &config.provider.model);
+            }
+            "Manage skills" => {
+                let mut skill_items = vec![("Add skill".to_string(), true)];
+                for skill in &config.skills {
+                    skill_items.push((format!("{} · {}", skill.name, skill.path), true));
+                }
+                if let Some(choice) = ui.menu("Skills", &skill_items)? {
+                    if choice == 0 {
+                        let name = ask(ui, "Skill name > ").await?;
+                        let path = ask(ui, "Skill file path > ").await?;
+                        if !name.is_empty() && !path.is_empty() {
+                            config.skills.push(crate::config::SkillConfig { name, path, enabled: true });
+                            config.save()?;
+                        }
+                    } else {
+                        let index = choice - 1;
+                        let action = ui.menu("Skill action", &[
+                            ("Edit".to_string(), true),
+                            ("Delete".to_string(), true),
+                            ("Cancel".to_string(), true),
+                        ])?;
+                        match action {
+                            Some(0) => {
+                                let name = ask(ui, "New skill name > ").await?;
+                                let path = ask(ui, "New skill path > ").await?;
+                                if !name.is_empty() { config.skills[index].name = name; }
+                                if !path.is_empty() { config.skills[index].path = path; }
+                                config.save()?;
+                            }
+                            Some(1) => { config.skills.remove(index); config.save()?; }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "Manage MCP connectors" => {
+                let mut connector_items = vec![("Add connector".to_string(), true)];
+                for connector in &config.mcp_connectors {
+                    connector_items.push((format!("{} · {}", connector.name, connector.command), true));
+                }
+                if let Some(choice) = ui.menu("MCP Connectors", &connector_items)? {
+                    if choice == 0 {
+                        let name = ask(ui, "Connector name > ").await?;
+                        let command = ask(ui, "Executable / command > ").await?;
+                        let args = ask(ui, "Arguments (space separated) > ").await?;
+                        if !name.is_empty() && !command.is_empty() {
+                            config.mcp_connectors.push(crate::config::McpConnectorConfig {
+                                name,
+                                command,
+                                args: args.split_whitespace().map(str::to_owned).collect(),
+                                enabled: true,
+                            });
+                            config.save()?;
+                        }
+                    } else {
+                        let index = choice - 1;
+                        let action = ui.menu("Connector action", &[
+                            ("Edit".to_string(), true),
+                            ("Delete".to_string(), true),
+                            ("Cancel".to_string(), true),
+                        ])?;
+                        match action {
+                            Some(0) => {
+                                let name = ask(ui, "New connector name > ").await?;
+                                let command = ask(ui, "New executable / command > ").await?;
+                                let args = ask(ui, "New arguments > ").await?;
+                                if !name.is_empty() { config.mcp_connectors[index].name = name; }
+                                if !command.is_empty() { config.mcp_connectors[index].command = command; }
+                                config.mcp_connectors[index].args = args.split_whitespace().map(str::to_owned).collect();
+                                config.save()?;
+                            }
+                            Some(1) => { config.mcp_connectors.remove(index); config.save()?; }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "Disable thought process display" | "Enable thought process display" => {
+                config.show_thought_process = !config.show_thought_process;
+                config.save()?;
+            }
+            "Disable code-depth preview" | "Enable code-depth preview" => {
+                config.code_depth_preview = !config.code_depth_preview;
+                config.save()?;
+            }
+            "Enable password lock" => enable_password_lock(config, secrets, vault_password)?,
+            "Disable password lock" => {
+                config.password_lock_enabled = false;
+                config.save()?;
+                *vault_password = None;
+            }
+            "License" => ui.set_notice("Cluster is distributed under the license in LICENSE"),
+            "Attribution" => ui.set_notice("Attribution details are maintained in the repository"),
+            "Credits message" => ui.set_notice("Credits content will be added by the maintainer"),
+            _ => {
+                let provider_index = selected;
+                let builtin_start = 2;
+                let builtin_end = builtin_start + builtins.len();
+                let provider = if provider_index >= builtin_start && provider_index < builtin_end {
+                    builtins[provider_index - builtin_start].clone()
+                } else if provider_index >= builtin_end + 2 && provider_index < builtin_end + 2 + config.providers.len() {
+                    config.providers[provider_index - builtin_end - 2].clone()
+                } else {
+                    continue;
+                };
+                let models = match list_models(client, &provider, secrets.get(&provider.name)).await {
+                    Ok(models) => models,
+                    Err(error) => {
+                        ui.set_notice(&format!("Model discovery unavailable: {error}"));
+                        Vec::new()
+                    }
+                };
+                let model = if models.is_empty() {
+                    ask(ui, &format!("Model ID [{}] > ", provider.model)).await?
+                } else {
+                    let options = models.iter().map(|model| (model.clone(), true)).collect::<Vec<_>>();
+                    match ui.menu("Select model", &options)? {
+                        Some(index) => models[index].clone(),
+                        None => continue,
+                    }
+                };
+                config.provider = provider;
+                if !model.is_empty() { config.provider.model = model; }
+                config.save()?;
+                ui.set_status(&config.provider.name, &config.provider.model);
+            }
+        }
+    }
+}
+
 fn print_help() {
     println!("  /help                 Show commands");
     println!("  /provider             Choose provider and discover its models");
