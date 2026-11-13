@@ -12,3 +12,4 @@ toml = "1.2.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
 crossterm = "0.28"
+ring = "0.17.14"
