@@ -487,7 +487,7 @@ async fn main() -> Result<()> {
     home_items.push(("Switch session".to_string(), true));
     home_items.push(("Changelogs".to_string(), true));
     home_items.push(("Exit".to_string(), true));
-    let Some(home_choice) = ui.menu(&format!("Cluster\nRelease Libra v{}", env!("CARGO_PKG_VERSION")), &home_items)? else {
+    let Some(home_choice) = ui.menu(&format!("Cluster\nRelease Libra V {}", env!("CARGO_PKG_VERSION")), &home_items)? else {
         return Ok(());
     };
     let settings_index = 1 + suggestions.len();
