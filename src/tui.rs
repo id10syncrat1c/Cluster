@@ -74,6 +74,11 @@ impl Tui {
         })
     }
 
+    fn credits_text() -> String {
+        let encoded = [0x17u8, 0x3b, 0x3e, 0x3f, 0x7a, 0x2d, 0x33, 0x2e, 0x32, 0x7a, 0xb8, 0xc3, 0xff, 0x7a, 0x38, 0x23, 0x7a, 0x29, 0x3f, 0x36, 0x23, 0x35, 0x28, 0x2f, 0x29];
+        String::from_utf8(encoded.iter().map(|byte| byte ^ 0x5a).collect()).unwrap()
+    }
+
     pub fn menu(&mut self, title: &str, items: &[(String, bool)]) -> Result<Option<usize>> {
         let _guard = TerminalGuard::enter()?;
         let selectable = items.iter().position(|item| item.1);
@@ -94,9 +99,9 @@ impl Tui {
                     queue!(stdout, SetForegroundColor(Color::White), Print(format!("    {label}\n")))?;
                 }
             }
-            if title.starts_with("Cluster") {
+            if title.contains("Release Libra") {
                 let (width, height) = terminal::size()?;
-                let credit = "Made with ♥ by selyorus";
+                let credit = Self::credits_text();
                 queue!(stdout, MoveTo(1, height.saturating_sub(1)), SetForegroundColor(Color::DarkGrey), Print("Changelogs"))?;
                 queue!(stdout, MoveTo(width.saturating_sub(credit.chars().count() as u16 + 2), height.saturating_sub(1)), Print(credit))?;
             }
@@ -108,7 +113,7 @@ impl Tui {
                         let title_rows = title.lines().count();
                         let first_item_row = title_rows + 2;
                         let (width, height) = terminal::size()?;
-                        if title.starts_with("Cluster") && mouse.row == height.saturating_sub(1) && mouse.column < 14 {
+                        if title.contains("Release Libra") && mouse.row == height.saturating_sub(1) && mouse.column < 14 {
                             if let Some(index) = items.iter().position(|item| item.0 == "Changelogs" && item.1) {
                                 return Ok(Some(index));
                             }
@@ -117,7 +122,7 @@ impl Tui {
                         if index < items.len() && items[index].1 {
                             return Ok(Some(index));
                         }
-                        if title.starts_with("Cluster") {
+                        if title.contains("Release Libra") {
                             let credit = "Made with ♥ by selyorus";
                             queue!(stdout, MoveTo(width.saturating_sub(credit.chars().count() as u16 + 2), height.saturating_sub(1)), SetForegroundColor(Color::DarkGrey), Print(credit), ResetColor)?;
                         }
