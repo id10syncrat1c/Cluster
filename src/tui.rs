@@ -530,6 +530,7 @@ mod tests {
             cursor: 0,
             scroll: 0,
             status: String::new(),
+            placeholder: None,
         }
     }
 
