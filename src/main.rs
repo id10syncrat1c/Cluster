@@ -519,7 +519,7 @@ async fn main() -> Result<()> {
             continue;
         }
         if input == "/settings" {
-            if let Err(error) = settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut ui).await {
+            if let Err(error) = settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut sessions, &mut ui).await {
                 ui.set_notice(&format!("Settings error: {error}"));
             }
             ui.set_status(&config.provider.name, &config.provider.model);
@@ -529,6 +529,7 @@ async fn main() -> Result<()> {
             if let Err(error) = choose_provider(&client, &mut config, &secrets).await {
                 ui.set_notice(&format!("Provider selection failed: {error}"));
             } else {
+                sessions.set_provider(config.provider.clone())?;
                 ui.set_status(&config.provider.name, &config.provider.model);
             }
             continue;
