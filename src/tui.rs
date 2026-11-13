@@ -293,13 +293,17 @@ impl Tui {
         output.join("\n")
     }
 
-    pub fn stream(&mut self, receiver: std::sync::mpsc::Receiver<String>, code_depth_preview: bool) -> Result<()> {
+    pub fn stream(&mut self, receiver: std::sync::mpsc::Receiver<String>, code_depth_preview: bool, show_thought_process: bool) -> Result<()> {
         let _guard = TerminalGuard::enter()?;
         self.messages.push(Message {
             role: 1,
             content: String::new(),
         });
-        self.status = "Generating · PgUp/PgDn to scroll".into();
+        self.status = if show_thought_process {
+            "Thinking · streaming response · PgUp/PgDn to scroll".into()
+        } else {
+            "Generating response".into()
+        };
         let mut raw_output = String::new();
         loop {
             match receiver.recv_timeout(Duration::from_millis(35)) {
@@ -337,7 +341,7 @@ impl Tui {
                 message.content = Self::compact_code_preview(&raw_output);
             }
         }
-        self.status = "Response complete".into();
+        self.status = if show_thought_process { "Thought process complete".into() } else { "Response complete".into() };
         self.render()
     }
 
