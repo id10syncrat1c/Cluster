@@ -11,6 +11,7 @@ use provider::{known_providers, list_models, stream_message};
 use reqwest::Client;
 use security::SecretStore;
 use serde_json::{Value, json};
+use std::fs;
 use std::io::{self, Write};
 use tui::Tui;
 
@@ -357,6 +358,24 @@ async fn settings_menu(
     }
 }
 
+fn load_suggestions() -> Vec<String> {
+    fs::read_to_string("data/suggestions.txt")
+        .map(|raw| raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+async fn show_changelog(client: &Client, ui: &mut Tui) -> Result<()> {
+    let url = "https://raw.githubusercontent.com/id10syncrat1c/Cluster/Nightly/CHANGELOG.md";
+    let body = client.get(url).send().await?.error_for_status()?.text().await?;
+    let heading = format!("## {}", env!("CARGO_PKG_VERSION"));
+    let section = body
+        .split_once(&heading)
+        .map(|(_, rest)| rest.split_once("\n## ").map_or(rest, |(section, _)| section))
+        .unwrap_or(&body);
+    ui.add_message(1, format!("Changelog · Libra v{}\\n{}", env!("CARGO_PKG_VERSION"), section.trim()));
+    Ok(())
+}
+
 fn print_help() {
     println!("  /help                 Show commands");
     println!("  /provider             Choose provider and discover its models");
@@ -421,8 +440,52 @@ async fn main() -> Result<()> {
         ui.add_message(1, turn.assistant_response.clone());
     }
 
+    let suggestions = load_suggestions();
+    let mut home_items = vec![("New chat".to_string(), true)];
+    for suggestion in &suggestions {
+        home_items.push((suggestion.clone(), true));
+    }
+    home_items.push(("Settings".to_string(), true));
+    home_items.push(("Switch session".to_string(), true));
+    home_items.push(("Changelogs".to_string(), true));
+    home_items.push(("Exit".to_string(), true));
+    let Some(home_choice) = ui.menu(&format!("Cluster\\nRelease Libra v{}", env!("CARGO_PKG_VERSION")), &home_items)? else {
+        return Ok(());
+    };
+    let settings_index = 1 + suggestions.len();
+    let sessions_index = settings_index + 1;
+    let changelog_index = settings_index + 2;
+    let exit_index = settings_index + 3;
+    let mut next_input = None;
+    match home_choice {
+        0 => {
+            let placeholders = [
+                "What are we building today?",
+                "Describe the problem. We can work through it.",
+                "Ask Cluster to inspect, explain, or create something.",
+                "Start with an idea, even if it is rough.",
+                "What needs fixing?",
+            ];
+            let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+            let placeholder = placeholders[(tick as usize) % placeholders.len()];
+            next_input = ui.input(Some(placeholder))?;
+        }
+        choice if choice <= suggestions.len() => next_input = Some(suggestions[choice - 1].clone()),
+        choice if choice == settings_index => {
+            settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut ui).await?;
+        }
+        choice if choice == sessions_index => ui.set_notice("Session switching is being implemented"),
+        choice if choice == changelog_index => {
+            if let Err(error) = show_changelog(&client, &mut ui).await {
+                ui.set_notice(&format!("Could not fetch changelog: {error}"));
+            }
+        }
+        choice if choice == exit_index => return Ok(()),
+        _ => {}
+    }
+
     loop {
-        let Some(input) = ui.input(None)? else {
+        let Some(input) = if let Some(value) = next_input.take() { Some(value) } else { ui.input(None)? } else {
             break;
         };
         if input.is_empty() {
