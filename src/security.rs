@@ -132,7 +132,7 @@ impl SecretStore {
             password.as_bytes(),
             &mut key_bytes,
         );
-        let key = LessSafeKey::new(UnboundKey::new(&aead::AES_256_GCM, &key_bytes)?);
+        let key = LessSafeKey::new(UnboundKey::new(&aead::AES_256_GCM, &key_bytes).map_err(|_| anyhow!("Could not initialize vault encryption"))?);
         key_bytes.fill(0);
         let mut plaintext = serde_json::to_vec(self)?;
         key.seal_in_place_append_tag(
