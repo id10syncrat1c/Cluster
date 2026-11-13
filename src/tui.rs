@@ -244,20 +244,59 @@ impl Tui {
         self.scroll = 0;
     }
 
-    pub fn stream(&mut self, receiver: std::sync::mpsc::Receiver<String>) -> Result<()> {
+    fn is_code_preview_line(line: &str) -> bool {
+        let line = line.trim_start();
+        line.starts_with('+')
+            || line.starts_with('-')
+            || line.starts_with("import ")
+            || line.starts_with("from ")
+            || line.starts_with("def ")
+            || line.starts_with("class ")
+            || line.starts_with("const ")
+            || line.starts_with("let ")
+            || line.starts_with("fn ")
+            || line.starts_with("pub ")
+            || line.starts_with("use ")
+    }
+
+    fn compact_code_preview(content: &str) -> String {
+        let mut output = Vec::new();
+        let mut skip_code = false;
+        for line in content.lines() {
+            if line.starts_with("Edited ") {
+                output.push(line);
+                skip_code = true;
+            } else if skip_code && (line.trim().is_empty() || Self::is_code_preview_line(line)) {
+                if line.trim().is_empty() {
+                    skip_code = false;
+                    output.push("");
+                }
+            } else {
+                skip_code = false;
+                output.push(line);
+            }
+        }
+        output.join("\n")
+    }
+
+    pub fn stream(&mut self, receiver: std::sync::mpsc::Receiver<String>, code_depth_preview: bool) -> Result<()> {
         let _guard = TerminalGuard::enter()?;
         self.messages.push(Message {
             role: 1,
             content: String::new(),
         });
         self.status = "Generating · PgUp/PgDn to scroll".into();
+        let mut raw_output = String::new();
         loop {
             match receiver.recv_timeout(Duration::from_millis(35)) {
                 Ok(chunk) => {
-                    if let Some(message) = self.messages.last_mut() {
-                        message.content.push_str(&chunk);
+                    raw_output.push_str(&chunk);
+                    if code_depth_preview {
+                        if let Some(message) = self.messages.last_mut() {
+                            message.content.push_str(&chunk);
+                        }
+                        self.render()?;
                     }
-                    self.render()?;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -277,6 +316,11 @@ impl Tui {
                         }
                     }
                 }
+            }
+        }
+        if !code_depth_preview {
+            if let Some(message) = self.messages.last_mut() {
+                message.content = Self::compact_code_preview(&raw_output);
             }
         }
         self.status = "Response complete".into();
@@ -534,6 +578,12 @@ mod tests {
             status: String::new(),
             placeholder: None,
         }
+    }
+
+    #[test]
+    fn compact_code_preview_keeps_edit_summary_and_hides_diff_lines() {
+        let preview = Tui::compact_code_preview("Edited python.html\nimport os\n- improt frint\n+ import print\nDone");
+        assert_eq!(preview, "Edited python.html\nDone");
     }
 
     #[test]
