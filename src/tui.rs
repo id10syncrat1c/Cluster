@@ -4,6 +4,7 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
+    terminal::ClearType,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::{self, Write};
@@ -73,6 +74,55 @@ impl Tui {
         })
     }
 
+    pub fn menu(&mut self, title: &str, items: &[(String, bool)]) -> Result<Option<usize>> {
+        let _guard = TerminalGuard::enter()?;
+        let selectable = items.iter().position(|item| item.1);
+        let Some(mut selected) = selectable else {
+            return Ok(None);
+        };
+        loop {
+            let mut stdout = io::stdout();
+            execute!(stdout, terminal::Clear(ClearType::All), MoveTo(0, 0))?;
+            queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  {title}\\n")))?;
+            queue!(stdout, SetForegroundColor(Color::DarkGrey), Print("  Use ↑/↓ to navigate · Enter to select · Esc to go back\\n\\n"))?;
+            for (index, (label, enabled)) in items.iter().enumerate() {
+                if !enabled {
+                    queue!(stdout, SetForegroundColor(Color::DarkGrey), Print(format!("  {label}\\n")))?;
+                } else if index == selected {
+                    queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  › {label}\\n")))?;
+                } else {
+                    queue!(stdout, SetForegroundColor(Color::White), Print(format!("    {label}\\n")))?;
+                }
+            }
+            queue!(stdout, ResetColor)?;
+            stdout.flush()?;
+            if event::poll(Duration::from_millis(100))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind != KeyEventKind::Press { continue; }
+                    match key.code {
+                        KeyCode::Esc => return Ok(None),
+                        KeyCode::Enter => return Ok(Some(selected)),
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            let mut index = selected;
+                            for _ in 0..items.len() {
+                                index = if index == 0 { items.len() - 1 } else { index - 1 };
+                                if items[index].1 { selected = index; break; }
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            let mut index = selected;
+                            for _ in 0..items.len() {
+                                index = (index + 1) % items.len();
+                                if items[index].1 { selected = index; break; }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
     pub fn input(&mut self, prompt: Option<&str>) -> Result<Option<String>> {
         let _guard = TerminalGuard::enter()?;
         self.status = prompt
@@ -87,6 +137,8 @@ impl Tui {
                     Event::Resize(w, h) => self.resize(w, h),
                     Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Esc => return Ok(None),
+                        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => return Ok(Some("/settings".into())),
+                        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => return Ok(Some("/sessions".into())),
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(None);
                         }
