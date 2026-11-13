@@ -86,7 +86,7 @@ impl Tui {
             home_placeholders: Vec::new(),
             placeholder_index: 0,
             last_placeholder_rotation: Instant::now(),
-            version: format!("v{}", env!("CARGO_PKG_VERSION")),
+            version: env!("CARGO_PKG_VERSION").to_string(),
         })
     }
 
@@ -103,7 +103,7 @@ impl Tui {
         };
         loop {
             let mut stdout = io::stdout();
-            let (screen_width, screen_height) = terminal::size()?;
+            let (_, screen_height) = terminal::size()?;
             let title_rows = title.lines().count();
             let first_item_row = title_rows + 2;
             let visible_rows = screen_height.saturating_sub(first_item_row as u16 + 2).max(1) as usize;
@@ -127,12 +127,6 @@ impl Tui {
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
                     Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-                        let (width, height) = (screen_width, screen_height);
-                        if title.contains("Release Libra") && mouse.row == height.saturating_sub(1) && mouse.column < 14 {
-                            if let Some(index) = items.iter().position(|item| item.0 == "Changelogs" && item.1) {
-                                return Ok(Some(index));
-                            }
-                        }
                         if mouse.row >= first_item_row as u16 {
                             let index = start + (mouse.row - first_item_row as u16) as usize;
                             if index < items.len() && items[index].1 {
@@ -557,7 +551,7 @@ impl Tui {
             for (row, line) in logo.iter().enumerate() {
                 self.text(logo_x, logo_y + row + 1, line, 1, width.saturating_sub(logo_x));
             }
-            let subtitle = format!("Release Libra {}", self.version);
+            let subtitle = format!("Release Libra V {}", self.version);
             self.text(width.saturating_sub(subtitle.chars().count()) / 2, logo_y + 5, &subtitle, 2, subtitle.chars().count());
             let box_width = width.saturating_sub(8).min(78).max(24);
             let box_x = width.saturating_sub(box_width) / 2;
@@ -583,7 +577,8 @@ impl Tui {
                 self.text(box_x, panel_y + 4, &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
             }
             let shortcuts = "Alt+E settings   Alt+T switch session   Ctrl+P commands";
-            self.text(width.saturating_sub(shortcuts.chars().count() + 2), height.saturating_sub(2), shortcuts, 2, width.saturating_sub(2));
+            let shortcuts_y = if self.resume_prompt.is_some() { box_y + 10 } else { box_y + 4 };
+            self.text(width.saturating_sub(shortcuts.chars().count() + 2), shortcuts_y, shortcuts, 2, width.saturating_sub(2));
             self.text(1, height.saturating_sub(1), "Changelogs", 2, 12);
             let credit = Self::credits_text();
             self.text(width.saturating_sub(credit.chars().count() + 2), height.saturating_sub(1), &credit, 2, width.saturating_sub(2));
