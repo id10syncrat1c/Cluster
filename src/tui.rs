@@ -120,9 +120,11 @@ impl Tui {
                                 return Ok(Some(index));
                             }
                         }
-                        let index = mouse.row.saturating_sub(first_item_row as u16) as usize;
-                        if index < items.len() && items[index].1 {
-                            return Ok(Some(index));
+                        if mouse.row >= first_item_row as u16 {
+                            let index = (mouse.row - first_item_row as u16) as usize;
+                            if index < items.len() && items[index].1 {
+                                return Ok(Some(index));
+                            }
                         }
                         if title.contains("Release Libra") {
                             let credit = "Made with ♥ by selyorus";
