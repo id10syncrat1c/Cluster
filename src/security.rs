@@ -5,6 +5,8 @@ use ring::{
     rand::{SecureRandom, SystemRandom},
 };
 use serde::{Deserialize, Serialize};
+use crossterm::{event::{self, Event, KeyCode, KeyEventKind}, terminal};
+use std::io::{self, Write};
 use std::{collections::HashMap, fs, num::NonZeroU32, path::PathBuf};
 
 const MAGIC: &[u8; 4] = b"CLV1";
@@ -16,6 +18,49 @@ pub struct SecretStore {
 }
 
 impl SecretStore {
+    pub fn path() -> Result<PathBuf> {
+        let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            PathBuf::from(xdg)
+        } else {
+            PathBuf::from(std::env::var("HOME").context("HOME is not set")?).join(".config")
+        };
+        Ok(base.join("cluster").join("secrets.enc"))
+    }
+
+    pub fn prompt_password(prompt: &str) -> Result<String> {
+        print!("{prompt}");
+        io::stdout().flush()?;
+        terminal::enable_raw_mode()?;
+        let mut password = String::new();
+        loop {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Enter => break,
+                    KeyCode::Esc => {
+                        password.clear();
+                        break;
+                    }
+                    KeyCode::Backspace => {
+                        password.pop();
+                        print!("\\x08 \\x08");
+                        io::stdout().flush()?;
+                    }
+                    KeyCode::Char(c) if !key.modifiers.is_empty() => {}
+                    KeyCode::Char(c) => {
+                        password.push(c);
+                        print!("*");
+                        io::stdout().flush()?;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        terminal::disable_raw_mode()?;
+        println!();
+        Ok(password)
+    }
+
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
     }
