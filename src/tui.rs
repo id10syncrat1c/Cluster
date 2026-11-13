@@ -82,15 +82,15 @@ impl Tui {
         loop {
             let mut stdout = io::stdout();
             execute!(stdout, terminal::Clear(ClearType::All), MoveTo(0, 0))?;
-            queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  {title}\\n")))?;
-            queue!(stdout, SetForegroundColor(Color::DarkGrey), Print("  Use ↑/↓ to navigate · Enter to select · Esc to go back\\n\\n"))?;
+            queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  {title}\n")))?;
+            queue!(stdout, SetForegroundColor(Color::DarkGrey), Print("  Use ↑/↓ to navigate · Enter to select · Esc to go back\n\n"))?;
             for (index, (label, enabled)) in items.iter().enumerate() {
                 if !enabled {
-                    queue!(stdout, SetForegroundColor(Color::DarkGrey), Print(format!("  {label}\\n")))?;
+                    queue!(stdout, SetForegroundColor(Color::DarkGrey), Print(format!("  {label}\n")))?;
                 } else if index == selected {
-                    queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  › {label}\\n")))?;
+                    queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  › {label}\n")))?;
                 } else {
-                    queue!(stdout, SetForegroundColor(Color::White), Print(format!("    {label}\\n")))?;
+                    queue!(stdout, SetForegroundColor(Color::White), Print(format!("    {label}\n")))?;
                 }
             }
             queue!(stdout, ResetColor)?;
