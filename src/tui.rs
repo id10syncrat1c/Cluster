@@ -94,16 +94,32 @@ impl Tui {
                     queue!(stdout, SetForegroundColor(Color::White), Print(format!("    {label}\n")))?;
                 }
             }
+            if title.starts_with("Cluster") {
+                let (width, height) = terminal::size()?;
+                let credit = "Made with ♥ by selyorus";
+                queue!(stdout, MoveTo(1, height.saturating_sub(1)), SetForegroundColor(Color::DarkGrey), Print("Changelogs"))?;
+                queue!(stdout, MoveTo(width.saturating_sub(credit.chars().count() as u16 + 2), height.saturating_sub(1)), Print(credit))?;
+            }
             queue!(stdout, ResetColor)?;
             stdout.flush()?;
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
                     Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
                         let title_rows = title.lines().count();
-                        let first_item_row = title_rows + 3;
+                        let first_item_row = title_rows + 2;
+                        let (width, height) = terminal::size()?;
+                        if title.starts_with("Cluster") && mouse.row == height.saturating_sub(1) && mouse.column < 14 {
+                            if let Some(index) = items.iter().position(|item| item.0 == "Changelogs" && item.1) {
+                                return Ok(Some(index));
+                            }
+                        }
                         let index = mouse.row.saturating_sub(first_item_row as u16) as usize;
                         if index < items.len() && items[index].1 {
                             return Ok(Some(index));
+                        }
+                        if title.starts_with("Cluster") {
+                            let credit = "Made with ♥ by selyorus";
+                            queue!(stdout, MoveTo(width.saturating_sub(credit.chars().count() as u16 + 2), height.saturating_sub(1)), SetForegroundColor(Color::DarkGrey), Print(credit), ResetColor)?;
                         }
                     }
                     Event::Key(key) => {
