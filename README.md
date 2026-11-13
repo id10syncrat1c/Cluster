@@ -1,27 +1,42 @@
 # Cluster — Libra
 
-Libra is the native terminal interface for Cluster, a lightweight personal AI agent runtime. It uses a custom cell-diff renderer with Crossterm input, streams provider output directly into the UI, and keeps conversation history and durable memory separate from the interface.
+Libra is the native terminal interface for Cluster, a lightweight personal AI agent runtime. It uses a custom Crossterm renderer, keyboard and mouse navigation, streams provider output, and keeps chat sessions and durable memory separate.
 
 ## Providers
 
-Use `/provider` inside Libra to choose OpenRouter, OpenAI, llama.cpp, or a custom OpenAI-compatible endpoint. Libra attempts to retrieve the provider's `/models` catalogue and lets you select a model. If discovery is unavailable, enter the model ID manually.
-
-API keys are read from environment variables and are never written to the config file:
-
-- OpenRouter: `OPENROUTER_API_KEY`
-- OpenAI: `OPENAI_API_KEY`
-- Custom: `CLUSTER_API_KEY` by default (configurable during setup)
-- llama.cpp: no key by default
+Open Settings with `Alt+E` or `/settings`. Choose OpenRouter, OpenAI, llama.cpp, or a locally added OpenAI-compatible endpoint. Provider model catalogues are fetched from the provider's `/models` endpoint when available.
 
 The default local llama.cpp endpoint is `http://127.0.0.1:8080/v1/chat/completions`.
 
+Environment-variable credentials remain supported:
+
+- OpenRouter: `OPENROUTER_API_KEY`
+- OpenAI: `OPENAI_API_KEY`
+- Custom: `CLUSTER_API_KEY` by default
+
+Credentials entered in Settings are stored in `secrets.enc`, not in the readable configuration file. The optional password lock encrypts that vault with AES-256-GCM and a PBKDF2-HMAC-SHA256-derived key. The password is never stored. There is no recovery key; losing the password means deleting the vault and entering credentials again.
+
+## Interface
+
+- Main menu suggestions are loaded from `data/suggestions.txt`.
+- `Alt+E` opens Settings.
+- `Alt+T` switches sessions.
+- `Enter` sends a message; `Shift+Enter` or `Ctrl+N` inserts a newline.
+- `PageUp` / `PageDown` scroll the conversation.
+- `Esc` or `Ctrl+C` exits the current screen.
+
+Settings include provider/model selection, local endpoints, skill and MCP connector metadata, thought-process display visibility, code-depth preview, and password-lock controls. Skill and MCP entries are stored as configuration metadata; they are not yet executed by the agent runtime.
+
 ## Commands
 
+- `/help` show commands
+- `/settings` open settings
+- `/sessions` switch sessions
 - `/provider` choose provider and model
 - `/models` refresh the current provider's model list
 - `/model` show the current model
-- `/model <id>` change the model
-- `/clear` clear conversation history
+- `/model <id>` change the current session's model
+- `/clear` clear the active session and conversation memory history
 - `/memory` show memory status
 - `/memory add <text>` save durable memory
 - `/memory export` export memory
@@ -29,6 +44,10 @@ The default local llama.cpp endpoint is `http://127.0.0.1:8080/v1/chat/completio
 - `/memory reset` reset memory
 - `/exit` exit
 
-Configuration is stored at `~/.config/cluster/config.toml` (or under `$XDG_CONFIG_HOME`). Conversation memory remains separate at `~/.local/share/cluster/memory.json` (or under `$XDG_DATA_HOME`).
+## Local data
 
-The terminal UI supports multiline input with Shift+Enter, message scrolling with PageUp/PageDown, and Ctrl+C or Esc to exit. Completion speed is estimated from output characters (approximately four characters per token), so it is not tokenizer-exact.
+Readable settings are stored at `~/.config/cluster/config.json` (or under `$XDG_CONFIG_HOME`). Existing `config.toml` files are migrated on first load. Encrypted credentials are stored separately at `~/.config/cluster/secrets.enc`.
+
+Conversation memory is stored at `~/.local/share/cluster/memory.json`; independent sessions and their provider/model snapshots are stored at `~/.local/share/cluster/sessions.json` (or under `$XDG_DATA_HOME`).
+
+The current release changelog is fetched from `CHANGELOG.md` in the repository.
