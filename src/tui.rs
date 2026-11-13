@@ -51,6 +51,9 @@ pub struct Tui {
     scroll: usize,
     status: String,
     placeholder: Option<String>,
+    home_mode: bool,
+    version: String,
+    tip: String,
 }
 impl Tui {
     pub fn new(provider: &str, model: &str) -> Result<Self> {
@@ -73,6 +76,9 @@ impl Tui {
             scroll: 0,
             status: format!("{provider} · {model}"),
             placeholder: None,
+            home_mode: false,
+            version: format!("v{}", env!("CARGO_PKG_VERSION")),
+            tip: "Tip  Use /connect with a compatible provider to get started".into(),
         })
     }
 
@@ -166,9 +172,10 @@ impl Tui {
 
     pub fn input(&mut self, prompt: Option<&str>) -> Result<Option<String>> {
         let _guard = TerminalGuard::enter()?;
-        self.status = prompt
-            .unwrap_or("Enter send · Ctrl+N newline · /help")
-            .to_string();
+        self.home_mode = prompt.is_some() && self.messages.is_empty();
+        if prompt.is_none() {
+            self.status = "Enter send · Ctrl+N newline · /help".to_string();
+        }
         self.placeholder = prompt.map(str::to_owned);
         self.input.clear();
         self.cursor = 0;
@@ -181,6 +188,8 @@ impl Tui {
                         KeyCode::Esc => return Ok(None),
                         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => return Ok(Some("/settings".into())),
                         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => return Ok(Some("/sessions".into())),
+                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(Some("/commands".into())),
+                        KeyCode::Tab => return Ok(Some("/sessions".into())),
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(None);
                         }
@@ -463,74 +472,80 @@ impl Tui {
         let width = self.width as usize;
         let height = self.height as usize;
         self.current.fill(Cell::default());
-        self.text(1, 0, " LIBRA / CLUSTER", 1, width.saturating_sub(2));
-        let status = self.status.clone();
-        let status_len = status.chars().count().min(width.saturating_sub(20));
-        let sx = width.saturating_sub(status_len + 2);
-        self.text(sx, 0, &status, 2, width.saturating_sub(sx));
-        for x in 0..width {
-            self.put(x, 1, '─', 3);
-        }
-
-        let input_top = height.saturating_sub(5);
-        if input_top > 2 {
-            let visible = input_top - 2;
-            let lines = self.lines(width.saturating_sub(4));
-            let end = lines.len().saturating_sub(self.scroll);
-            let start = end.saturating_sub(visible);
-            for (row, (role, line)) in lines[start..end].iter().enumerate() {
-                self.text(
-                    2,
-                    row + 2,
-                    line,
-                    if *role == 0 {
-                        1
-                    } else if *role == 2 {
-                        3
-                    } else {
-                        0
-                    },
-                    width.saturating_sub(4),
-                );
-            }
-        }
-
-        for x in 0..width {
-            self.put(x, input_top, '─', 3);
-        }
         let input = self.input.iter().collect::<String>();
         let input_lines = input.split('\n').collect::<Vec<_>>();
-        let visible_rows = height.saturating_sub(input_top + 2).max(1);
-        let first_line = input_lines.len().saturating_sub(visible_rows);
-        if input.is_empty() {
-            if let Some(placeholder) = self.placeholder.clone() {
-                self.text(2, input_top + 1, &placeholder, 3, width.saturating_sub(4));
+        let (cursor_x, cursor_y);
+        if self.home_mode {
+            let logo = [
+                "█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█",
+                "█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀",
+                "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀",
+            ];
+            let logo_width = logo[0].chars().count();
+            let logo_x = width.saturating_sub(logo_width) / 2;
+            let logo_y = height.saturating_sub(15) / 2;
+            for (row, line) in logo.iter().enumerate() {
+                self.text(logo_x, logo_y + row, line, 1, width.saturating_sub(logo_x));
             }
+            let box_width = width.saturating_sub(8).min(78).max(24);
+            let box_x = width.saturating_sub(box_width) / 2;
+            let box_y = logo_y + 6;
+            self.text(box_x, box_y, &format!("┏{}┓", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
+            self.text(box_x, box_y + 1, "┃", 1, 1);
+            if input.is_empty() {
+                if let Some(placeholder) = self.placeholder.clone() {
+                    self.text(box_x + 2, box_y + 1, &placeholder, 3, box_width.saturating_sub(4));
+                }
+            } else {
+                self.text(box_x + 2, box_y + 1, &input, 0, box_width.saturating_sub(4));
+            }
+            self.text(box_x + box_width.saturating_sub(1), box_y + 1, "┃", 1, 1);
+            self.text(box_x, box_y + 2, &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
+            let status = format!("{} · {}", self.status, self.version);
+            let status_x = width.saturating_sub(status.chars().count() + 2);
+            self.text(status_x, height.saturating_sub(1), &status, 2, width.saturating_sub(status_x));
+            self.text(2, height.saturating_sub(4), &self.tip, 2, width.saturating_sub(4));
+            let shortcuts = "Tab agents   Ctrl+P commands";
+            self.text(width.saturating_sub(shortcuts.chars().count() + 2), height.saturating_sub(2), shortcuts, 2, width.saturating_sub(2));
+            let cursor_col = self.input.iter().take(self.cursor).count();
+            cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
+            cursor_y = box_y + 1;
         } else {
-            for (row, line) in input_lines.iter().skip(first_line).enumerate() {
-                self.text(2, input_top + 1 + row, line, 0, width.saturating_sub(4));
+            self.text(1, 0, " LIBRA / CLUSTER", 1, width.saturating_sub(2));
+            let status = self.status.clone();
+            let status_len = status.chars().count().min(width.saturating_sub(20));
+            let sx = width.saturating_sub(status_len + 2);
+            self.text(sx, 0, &status, 2, width.saturating_sub(sx));
+            for x in 0..width { self.put(x, 1, '─', 3); }
+            let input_top = height.saturating_sub(5);
+            if input_top > 2 {
+                let visible = input_top - 2;
+                let lines = self.lines(width.saturating_sub(4));
+                let end = lines.len().saturating_sub(self.scroll);
+                let start = end.saturating_sub(visible);
+                for (row, (role, line)) in lines[start..end].iter().enumerate() {
+                    self.text(2, row + 2, line, if *role == 0 { 1 } else if *role == 2 { 3 } else { 0 }, width.saturating_sub(4));
+                }
             }
+            for x in 0..width { self.put(x, input_top, '─', 3); }
+            let visible_rows = height.saturating_sub(input_top + 2).max(1);
+            let first_line = input_lines.len().saturating_sub(visible_rows);
+            if input.is_empty() {
+                if let Some(placeholder) = self.placeholder.clone() {
+                    self.text(2, input_top + 1, &placeholder, 3, width.saturating_sub(4));
+                }
+            } else {
+                for (row, line) in input_lines.iter().skip(first_line).enumerate() {
+                    self.text(2, input_top + 1 + row, line, 0, width.saturating_sub(4));
+                }
+            }
+            self.text(1, height.saturating_sub(1), "Ctrl+N newline · Enter send · PgUp/PgDn scroll · Ctrl+C exit", 2, width.saturating_sub(2));
+            let cursor_line = self.input[..self.cursor].iter().filter(|c| **c == '\n').count();
+            let cursor_col = self.input[..self.cursor].iter().rev().take_while(|c| **c != '\n').count();
+            let visible_cursor_line = cursor_line.saturating_sub(first_line);
+            cursor_x = 2 + cursor_col.min(width.saturating_sub(3));
+            cursor_y = input_top + 1 + visible_cursor_line;
         }
-        self.text(
-            1,
-            height.saturating_sub(1),
-            "Ctrl+N newline · Enter send · PgUp/PgDn scroll · Ctrl+C exit",
-            2,
-            width.saturating_sub(2),
-        );
-
-        let cursor_line = self.input[..self.cursor]
-            .iter()
-            .filter(|c| **c == '\n')
-            .count();
-        let cursor_col = self.input[..self.cursor]
-            .iter()
-            .rev()
-            .take_while(|c| **c != '\n')
-            .count();
-        let visible_cursor_line = cursor_line.saturating_sub(first_line);
-        let cursor_x = 2 + cursor_col.min(width.saturating_sub(3));
-        let cursor_y = input_top + 1 + visible_cursor_line;
         let mut stdout = io::stdout();
         for y in 0..height {
             let mut x = 0usize;
@@ -595,6 +610,9 @@ mod tests {
             scroll: 0,
             status: String::new(),
             placeholder: None,
+            home_mode: false,
+            version: String::new(),
+            tip: String::new(),
         }
     }
 
