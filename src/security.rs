@@ -96,13 +96,13 @@ impl SecretStore {
             password.as_bytes(),
             &mut key_bytes,
         );
-        let key = LessSafeKey::new(UnboundKey::new(&aead::AES_256_GCM, &key_bytes)?);
+        let key = LessSafeKey::new(UnboundKey::new(&aead::AES_256_GCM, &key_bytes).map_err(|_| anyhow!("Could not initialize vault encryption"))?);
         key_bytes.fill(0);
         let mut ciphertext = bytes[32..].to_vec();
         let plaintext = key
             .open_in_place(
                 Nonce::assume_unique_for_key(nonce_bytes),
-                Aad::from(MAGIC),
+                Aad::from(MAGIC.as_slice()),
                 &mut ciphertext,
             )
             .map_err(|_| anyhow!("Incorrect password or corrupted credential vault"))?;
