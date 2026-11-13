@@ -108,6 +108,30 @@ fn error_detail(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(500).collect())
 }
 
+fn process_sse_data(data: &str, output: &mut String, chunks: &Sender<String>) -> bool {
+    if data.trim() == "[DONE]" {
+        return false;
+    }
+    let Ok(event) = serde_json::from_str::<Value>(data.trim()) else {
+        return true;
+    };
+    let content = &event["choices"][0]["delta"]["content"];
+    if let Some(text) = content.as_str() {
+        if !text.is_empty() {
+            output.push_str(text);
+            let _ = chunks.send(text.to_string());
+        }
+    } else if let Some(parts) = content.as_array() {
+        for part in parts {
+            if let Some(text) = part["text"].as_str() {
+                output.push_str(text);
+                let _ = chunks.send(text.to_string());
+            }
+        }
+    }
+    true
+}
+
 pub async fn stream_message(
     client: &Client,
     provider: &ProviderConfig,
@@ -146,7 +170,7 @@ pub async fn stream_message(
     let mut output = String::new();
     let started = Instant::now();
 
-    while let Some(chunk) = stream.next().await {
+    'stream: while let Some(chunk) = stream.next().await {
         pending.push_str(&String::from_utf8_lossy(
             &chunk.context("Connection interrupted while streaming response")?,
         ));
@@ -156,29 +180,13 @@ pub async fn stream_message(
             let Some(data) = line.strip_prefix("data:") else {
                 continue;
             };
-            let data = data.trim();
-            if data == "[DONE]" {
-                break;
-            }
-
-            let Ok(event) = serde_json::from_str::<Value>(data) else {
-                continue;
-            };
-            let content = &event["choices"][0]["delta"]["content"];
-            if let Some(text) = content.as_str() {
-                if !text.is_empty() {
-                    output.push_str(text);
-                    let _ = chunks.send(text.to_string());
-                }
-            } else if let Some(parts) = content.as_array() {
-                for part in parts {
-                    if let Some(text) = part["text"].as_str() {
-                        output.push_str(text);
-                        let _ = chunks.send(text.to_string());
-                    }
-                }
+            if !process_sse_data(data, &mut output, &chunks) {
+                break 'stream;
             }
         }
+    }
+    if let Some(data) = pending.trim().strip_prefix("data:") {
+        process_sse_data(data, &mut output, &chunks);
     }
 
     let elapsed = started.elapsed().as_secs_f64();
@@ -202,6 +210,14 @@ pub async fn stream_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn done_event_ends_sse_processing() {
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let mut output = String::new();
+        assert!(!process_sse_data("[DONE]", &mut output, &sender));
+        assert!(output.is_empty());
+    }
 
     #[test]
     fn model_catalogue_url_is_derived_from_chat_endpoint() {

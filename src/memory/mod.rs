@@ -142,6 +142,7 @@ impl MemoryStore {
         let temporary = self.path.with_extension(format!("tmp-{}", generate_id()));
 
         fs::write(&temporary, data).context("Could not write temporary memory file")?;
+        restrict_permissions(&temporary)?;
         fs::rename(&temporary, &self.path).context("Could not replace memory file")?;
 
         Ok(())
@@ -160,6 +161,7 @@ impl MemoryStore {
     pub fn export(&self, path: &Path) -> Result<()> {
         let data = serde_json::to_string_pretty(&self.data)?;
         fs::write(path, data).context("Could not export memory file")?;
+        restrict_permissions(path)?;
         Ok(())
     }
 
@@ -251,6 +253,18 @@ impl MemoryStore {
             )
         })]
     }
+}
+
+fn restrict_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .context("Could not restrict memory file permissions")?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn generate_id() -> String {

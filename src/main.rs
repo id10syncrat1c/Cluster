@@ -146,6 +146,10 @@ async fn ask(ui: &mut Tui, prompt: &str) -> Result<String> {
     Ok(ui.input(Some(prompt))?.unwrap_or_default().trim().to_owned())
 }
 
+async fn ask_secret(ui: &mut Tui, prompt: &str) -> Result<String> {
+    Ok(ui.secret_input(prompt)?.unwrap_or_default().trim().to_owned())
+}
+
 fn enable_password_lock(
     config: &mut AppConfig,
     secrets: &SecretStore,
@@ -213,7 +217,7 @@ async fn settings_menu(
                     continue;
                 }
                 let model = ask(ui, "Default model ID > ").await?;
-                let token = ask(ui, "API token (leave blank if not required) > ").await?;
+                let token = ask_secret(ui, "API token (leave blank if not required) > ").await?;
                 let provider = crate::config::ProviderConfig {
                     name: name.clone(),
                     endpoint,
@@ -332,17 +336,45 @@ async fn settings_menu(
             }
             "Manage stored credentials" => {
                 let keys = secrets.keys();
-                let options = keys.iter().map(|key| (key.clone(), true)).collect::<Vec<_>>();
+                let mut options = vec![("Add or update credential".to_string(), true)];
+                options.extend(keys.iter().map(|key| (format!("Remove {key}"), true)));
                 if let Some(index) = ui.menu("Stored credentials", &options)? {
-                    let key = &keys[index];
-                    secrets.remove(key);
-                    if let Some(password) = vault_password.as_deref() {
-                        secrets.save(&SecretStore::path()?, password)?;
+                    if index == 0 {
+                        let mut provider_names = known_providers().into_iter().map(|provider| provider.name).collect::<Vec<_>>();
+                        provider_names.extend(config.providers.iter().map(|provider| provider.name.clone()));
+                        provider_names.sort();
+                        provider_names.dedup();
+                        let provider_options = provider_names.iter().map(|name| (name.clone(), true)).collect::<Vec<_>>();
+                        if let Some(provider_index) = ui.menu("Credential provider", &provider_options)? {
+                            let name = &provider_names[provider_index];
+                            let token = ask_secret(ui, &format!("API token for {name} > ")).await?;
+                            if !token.is_empty() {
+                                if !config.password_lock_enabled {
+                                    enable_password_lock(config, secrets, vault_password)?;
+                                }
+                                secrets.set(name.clone(), token);
+                                let password = vault_password.as_deref().ok_or_else(|| anyhow!("Password vault is locked"))?;
+                                secrets.save(&SecretStore::path()?, password)?;
+                                ui.set_notice(&format!("Credential saved for {name}"));
+                            }
+                        }
+                    } else if let Some(key) = keys.get(index - 1) {
+                        secrets.remove(key);
+                        if let Some(password) = vault_password.as_deref() {
+                            secrets.save(&SecretStore::path()?, password)?;
+                        }
+                        ui.set_notice(&format!("Credential removed: {key}"));
                     }
                 }
             }
-            "License" => ui.set_notice("Cluster is distributed under the license in LICENSE"),
-            "Attribution" => ui.set_notice("Attribution details are maintained in the repository"),
+            "License" => {
+                ui.add_message(1, format!("GNU General Public License v3\n{}", include_str!("../LICENSE")));
+                return Ok(());
+            }
+            "Attribution" => {
+                ui.add_message(1, include_str!("../ATTRIBUTION.md").to_string());
+                return Ok(());
+            }
             "Credits message" => ui.set_notice("Credits content will be added by the maintainer"),
             _ => {
                 let provider_index = selected;
@@ -382,11 +414,18 @@ async fn settings_menu(
 }
 
 fn load_suggestions() -> Vec<String> {
-    let custom = AppConfig::path().ok().and_then(|path| path.parent().map(|parent| parent.join("suggestions.txt")));
-    let raw = custom.and_then(|path| fs::read_to_string(path).ok())
-        .or_else(|| fs::read_to_string("data/suggestions.txt").ok())
-        .unwrap_or_default();
-    raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect()
+    let custom = AppConfig::path()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("suggestions.txt")));
+    let raw = custom
+        .and_then(|path| fs::read_to_string(path).ok())
+        .filter(|content| content.lines().any(|line| !line.trim().is_empty()))
+        .unwrap_or_else(|| include_str!("../data/suggestions.txt").to_owned());
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 async fn show_changelog(client: &Client, ui: &mut Tui) -> Result<()> {
@@ -418,24 +457,39 @@ fn print_help() {
     println!("  /exit                 Exit Cluster");
 }
 
-fn switch_session(ui: &mut Tui, sessions: &mut SessionStore, config: &mut AppConfig, messages: &mut Vec<Value>) -> Result<()> {
+fn restore_active_session(
+    ui: &mut Tui,
+    sessions: &SessionStore,
+    config: &mut AppConfig,
+    messages: &mut Vec<Value>,
+) -> Result<()> {
+    config.provider = sessions.active().provider.clone();
+    config.save()?;
+    messages.clear();
+    ui.clear_messages();
+    for turn in &sessions.active().history {
+        messages.push(json!({"role":"user","content":turn.user_message}));
+        messages.push(json!({"role":"assistant","content":turn.assistant_response}));
+        ui.add_message(0, turn.user_message.clone());
+        ui.add_message_with_preview(1, turn.assistant_response.clone(), config.code_depth_preview);
+    }
+    ui.set_status(&config.provider.name, &config.provider.model);
+    Ok(())
+}
+
+fn switch_session(
+    ui: &mut Tui,
+    sessions: &mut SessionStore,
+    config: &mut AppConfig,
+    messages: &mut Vec<Value>,
+) -> Result<()> {
     let items = sessions.sessions().iter().enumerate().map(|(index, session)| {
         let active = session.id == sessions.active().id;
         (format!("{} · {} · {}{}", index + 1, session.name, session.provider.model, if active { " · active" } else { "" }), true)
     }).collect::<Vec<_>>();
     if let Some(index) = ui.menu("Switch session", &items)? {
         sessions.switch(index)?;
-        config.provider = sessions.active().provider.clone();
-        config.save()?;
-        messages.clear();
-        ui.clear_messages();
-        for turn in &sessions.active().history {
-            messages.push(json!({"role":"user","content":turn.user_message}));
-            messages.push(json!({"role":"assistant","content":turn.assistant_response}));
-            ui.add_message(0, turn.user_message.clone());
-            ui.add_message_with_preview(1, turn.assistant_response.clone(), config.code_depth_preview);
-        }
-        ui.set_status(&config.provider.name, &config.provider.model);
+        restore_active_session(ui, sessions, config, messages)?;
     }
     Ok(())
 }
@@ -444,9 +498,14 @@ fn switch_session(ui: &mut Tui, sessions: &mut SessionStore, config: &mut AppCon
 async fn main() -> Result<()> {
     let mut config = AppConfig::load()?;
     let vault_path = SecretStore::path()?;
-    let mut vault_password = if config.password_lock_enabled {
+    let mut vault_password = if config.password_lock_enabled && vault_path.exists() {
         Some(SecretStore::prompt_password("Cluster password: ")?)
     } else {
+        if config.password_lock_enabled {
+            eprintln!("Credential vault is missing. Password lock has been disabled; add credentials again in Settings.");
+            config.password_lock_enabled = false;
+            config.save()?;
+        }
         None
     };
     let mut secrets = if let Some(password) = vault_password.as_deref() {
@@ -464,40 +523,48 @@ async fn main() -> Result<()> {
         assistant_response: turn.assistant_response.clone(),
         timestamp: turn.timestamp,
     }).collect())?;
+
+    let previous_session_index = sessions.sessions().iter().position(|session| {
+        session.id == sessions.active().id && !session.history.is_empty()
+    });
+    let resume_preview = previous_session_index
+        .and_then(|index| sessions.sessions().get(index))
+        .and_then(|session| session.history.last())
+        .map(|turn| preview(&turn.user_message, 60));
+
     config.provider = sessions.active().provider.clone();
     config.save()?;
     let mut messages = Vec::new();
-
-    for turn in sessions.active().history.iter().rev().take(MAX_HISTORY / 2).collect::<Vec<_>>().into_iter().rev() {
-        messages.push(json!({"role": "user", "content": turn.user_message}));
-        messages.push(json!({"role": "assistant", "content": turn.assistant_response}));
-    }
-
     let mut ui = Tui::new(&config.provider.name, &config.provider.model)?;
-    for turn in sessions.active().history.iter().rev().take(MAX_HISTORY / 2).collect::<Vec<_>>().into_iter().rev() {
-        ui.add_message(0, turn.user_message.clone());
-        ui.add_message(1, turn.assistant_response.clone());
-    }
 
-    let placeholders = [
-        "Ask anything…",
-        "What are we building today?",
-        "Describe the problem you want to solve.",
-        "Ask Cluster to inspect, explain, or create something.",
-        "What needs fixing?",
-    ];
-    let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-    let placeholder = placeholders[(tick as usize) % placeholders.len()];
     sessions.create(config.provider.clone())?;
-    messages.clear();
-    ui.clear_messages();
-    let mut next_input = ui.input(Some(placeholder))?;
+    let suggestions = load_suggestions();
+    let tick = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    let placeholder = suggestions[(tick as usize) % suggestions.len()].clone();
+    ui.set_home_suggestions(suggestions);
+    ui.set_resume_prompt(resume_preview);
+    let mut resume_session_index = previous_session_index;
+    let mut next_input = ui.home_input(Some(&placeholder))?;
 
     loop {
         let Some(input) = (if let Some(value) = next_input.take() { Some(value) } else { ui.input(None)? }) else {
             break;
         };
         if input.is_empty() {
+            continue;
+        }
+        if input == "/resume" {
+            if let Some(index) = resume_session_index.take() {
+                sessions.switch(index)?;
+                ui.set_resume_prompt(None);
+                restore_active_session(&mut ui, &sessions, &mut config, &mut messages)?;
+            }
+            continue;
+        }
+        if input == "/changelog" {
+            if let Err(error) = show_changelog(&client, &mut ui).await {
+                ui.set_notice(&format!("Could not fetch changelog: {error}"));
+            }
             continue;
         }
         if input == "/exit" || input == "/quit" {

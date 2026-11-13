@@ -14,11 +14,12 @@ Environment-variable credentials remain supported:
 - OpenAI: `OPENAI_API_KEY`
 - Custom: `CLUSTER_API_KEY` by default
 
-Credentials entered in Settings are stored in `secrets.enc`, not in the readable configuration file. The optional password lock encrypts that vault with AES-256-GCM and a PBKDF2-HMAC-SHA256-derived key. The password is never stored. There is no recovery key; losing the password means deleting the vault and entering credentials again.
+Credentials entered in Settings are stored in `secrets.enc`, not in the readable configuration file. Token entry is masked; the stored-credentials menu can add, update, or remove credentials for built-in and local providers. The optional password lock encrypts that vault with AES-256-GCM and PBKDF2-HMAC-SHA256 (600,000 iterations). The password is never stored. There is no recovery key; if the password is lost, delete `secrets.enc`. On the next launch Cluster detects the missing vault, disables the lock, and lets you configure credentials again. The lock protects credentials only; conversation memory and session history remain readable JSON files.
 
 ## Interface
 
-- Main menu suggestions are loaded from `~/.config/cluster/suggestions.txt` when present, otherwise from the bundled `data/suggestions.txt` file.
+- Main menu suggestions are loaded from `~/.config/cluster/suggestions.txt` when present, otherwise from the bundled `data/suggestions.txt` file. Suggestions rotate while the home screen is idle.
+- Startup creates a fresh session. When the previously active session has conversation history, the home screen offers to resume it. Choosing No keeps the fresh session active.
 - `Alt+E` opens Settings.
 - `Alt+T` switches sessions.
 - `Enter` sends a message; `Shift+Enter` or `Ctrl+N` inserts a newline.
@@ -48,6 +49,6 @@ Settings include provider/model selection, local endpoints, skill and MCP connec
 
 Readable settings are stored at `~/.config/cluster/config.json` (or under `$XDG_CONFIG_HOME`). Existing `config.toml` files are migrated on first load. Encrypted credentials are stored separately at `~/.config/cluster/secrets.enc`.
 
-Conversation memory is stored at `~/.local/share/cluster/memory.json`; independent sessions and their provider/model snapshots are stored at `~/.local/share/cluster/sessions.json` (or under `$XDG_DATA_HOME`).
+Conversation memory is stored at `~/.local/share/cluster/memory.json`; independent sessions and their provider/model snapshots are stored at `~/.local/share/cluster/sessions.json` (or under `$XDG_DATA_HOME`). On Unix-like systems, memory, session, settings, and vault files are written with owner-only permissions (`0600`).
 
 The current release changelog is fetched from `CHANGELOG.md` in the repository.

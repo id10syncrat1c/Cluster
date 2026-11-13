@@ -8,7 +8,7 @@ use crossterm::{
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Cell {
@@ -52,8 +52,12 @@ pub struct Tui {
     status: String,
     placeholder: Option<String>,
     home_mode: bool,
+    mask_input: bool,
+    resume_prompt: Option<String>,
+    home_placeholders: Vec<String>,
+    placeholder_index: usize,
+    last_placeholder_rotation: Instant,
     version: String,
-    tip: String,
 }
 impl Tui {
     pub fn new(provider: &str, model: &str) -> Result<Self> {
@@ -77,8 +81,12 @@ impl Tui {
             status: format!("{provider} · {model}"),
             placeholder: None,
             home_mode: false,
+            mask_input: false,
+            resume_prompt: None,
+            home_placeholders: Vec::new(),
+            placeholder_index: 0,
+            last_placeholder_rotation: Instant::now(),
             version: format!("v{}", env!("CARGO_PKG_VERSION")),
-            tip: "Tip  Use /connect with a compatible provider to get started".into(),
         })
     }
 
@@ -114,12 +122,6 @@ impl Tui {
                     queue!(stdout, SetForegroundColor(Color::White), Print(format!("    {label}\n")))?;
                 }
             }
-            if title.contains("Release Libra") {
-                let (width, height) = terminal::size()?;
-                let credit = Self::credits_text();
-                queue!(stdout, MoveTo(1, height.saturating_sub(1)), SetForegroundColor(Color::DarkGrey), Print("Changelogs"))?;
-                queue!(stdout, MoveTo(width.saturating_sub(credit.chars().count() as u16 + 2), height.saturating_sub(1)), Print(credit))?;
-            }
             queue!(stdout, ResetColor)?;
             stdout.flush()?;
             if event::poll(Duration::from_millis(100))? {
@@ -136,10 +138,6 @@ impl Tui {
                             if index < items.len() && items[index].1 {
                                 return Ok(Some(index));
                             }
-                        }
-                        if title.contains("Release Libra") {
-                            let credit = "Made with ♥ by selyorus";
-                            queue!(stdout, MoveTo(width.saturating_sub(credit.chars().count() as u16 + 2), height.saturating_sub(1)), SetForegroundColor(Color::DarkGrey), Print(credit), ResetColor)?;
                         }
                     }
                     Event::Key(key) => {
@@ -171,29 +169,95 @@ impl Tui {
     }
 
     pub fn input(&mut self, prompt: Option<&str>) -> Result<Option<String>> {
+        self.input_mode(prompt, false, false)
+    }
+
+    pub fn home_input(&mut self, prompt: Option<&str>) -> Result<Option<String>> {
+        self.input_mode(prompt, true, false)
+    }
+
+    pub fn secret_input(&mut self, prompt: &str) -> Result<Option<String>> {
+        self.input_mode(Some(prompt), false, true)
+    }
+
+    pub fn set_home_suggestions(&mut self, suggestions: Vec<String>) {
+        self.home_placeholders = suggestions;
+    }
+
+    pub fn set_resume_prompt(&mut self, preview: Option<String>) {
+        self.resume_prompt = preview;
+    }
+
+    fn input_mode(
+        &mut self,
+        prompt: Option<&str>,
+        home_mode: bool,
+        mask_input: bool,
+    ) -> Result<Option<String>> {
         let _guard = TerminalGuard::enter()?;
-        self.home_mode = prompt.is_some() && self.messages.is_empty();
+        self.home_mode = home_mode;
+        self.mask_input = mask_input;
         if prompt.is_none() {
             self.status = "Enter send · Ctrl+N newline · /help".to_string();
         }
         self.placeholder = prompt.map(str::to_owned);
+        if self.home_mode {
+            if let Some(index) = self.home_placeholders.iter().position(|item| Some(item) == self.placeholder.as_ref()) {
+                self.placeholder_index = index;
+            }
+        }
+        self.last_placeholder_rotation = Instant::now();
         self.input.clear();
         self.cursor = 0;
         loop {
+            if self.home_mode
+                && self.input.is_empty()
+                && self.home_placeholders.len() > 1
+                && self.last_placeholder_rotation.elapsed() >= Duration::from_secs(4)
+            {
+                self.placeholder_index = (self.placeholder_index + 1) % self.home_placeholders.len();
+                self.placeholder = Some(self.home_placeholders[self.placeholder_index].clone());
+                self.last_placeholder_rotation = Instant::now();
+            }
             self.render()?;
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
                     Event::Resize(w, h) => self.resize(w, h),
+                    Event::Mouse(mouse) if self.home_mode && mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                        let logo_y = self.height.saturating_sub(20) / 2;
+                        let box_y = logo_y + 7;
+                        let panel_y = box_y + 4;
+                        let buttons_y = panel_y + 3;
+                        let panel_left = self.width.saturating_sub(self.width.saturating_sub(8).min(78).max(24)) / 2;
+                        if self.resume_prompt.is_some() && mouse.row == buttons_y {
+                            if mouse.column < self.width / 2 && mouse.column >= panel_left {
+                                return Ok(Some("/resume".into()));
+                            }
+                            if mouse.column >= self.width / 2 {
+                                self.resume_prompt = None;
+                            }
+                        } else if mouse.row == self.height.saturating_sub(1) && (1..13).contains(&mouse.column) {
+                            return Ok(Some("/changelog".into()));
+                        }
+                    }
                     Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Esc => return Ok(None),
                         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => return Ok(Some("/settings".into())),
                         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::ALT) => return Ok(Some("/sessions".into())),
                         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(Some("/commands".into())),
                         KeyCode::Tab => return Ok(Some("/sessions".into())),
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            return Ok(None);
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
+                        KeyCode::Char(c) if self.home_mode && self.input.is_empty() && self.resume_prompt.is_some() && c.to_ascii_lowercase() == 'y' => {
+                            return Ok(Some("/resume".into()));
+                        }
+                        KeyCode::Char(c) if self.home_mode && self.input.is_empty() && self.resume_prompt.is_some() && c.to_ascii_lowercase() == 'n' => {
+                            self.resume_prompt = None;
                         }
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input.insert(self.cursor, '\n');
+                            self.cursor += 1;
+                        }
+                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                             self.input.insert(self.cursor, '\n');
                             self.cursor += 1;
                         }
@@ -203,6 +267,7 @@ impl Tui {
                             self.cursor = 0;
                             self.placeholder = None;
                             self.home_mode = false;
+                            self.mask_input = false;
                             return Ok(Some(value));
                         }
                         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -230,12 +295,8 @@ impl Tui {
                                 .position(|c| *c == '\n')
                                 .unwrap_or(self.input.len() - self.cursor);
                         }
-                        KeyCode::PageUp => {
-                            self.scroll = self.scroll.saturating_add(self.page_size());
-                        }
-                        KeyCode::PageDown => {
-                            self.scroll = self.scroll.saturating_sub(self.page_size());
-                        }
+                        KeyCode::PageUp => self.scroll = self.scroll.saturating_add(self.page_size()),
+                        KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(self.page_size()),
                         _ => {}
                     },
                     _ => {}
@@ -319,12 +380,14 @@ impl Tui {
             match receiver.recv_timeout(Duration::from_millis(35)) {
                 Ok(chunk) => {
                     raw_output.push_str(&chunk);
-                    if code_depth_preview {
-                        if let Some(message) = self.messages.last_mut() {
+                    if let Some(message) = self.messages.last_mut() {
+                        if code_depth_preview {
                             message.content.push_str(&chunk);
+                        } else {
+                            message.content = Self::compact_code_preview(&raw_output);
                         }
-                        self.render()?;
                     }
+                    self.render()?;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -473,7 +536,11 @@ impl Tui {
         let width = self.width as usize;
         let height = self.height as usize;
         self.current.fill(Cell::default());
-        let input = self.input.iter().collect::<String>();
+        let input = if self.mask_input {
+            "*".repeat(self.input.len())
+        } else {
+            self.input.iter().collect::<String>()
+        };
         let input_lines = input.split('\n').collect::<Vec<_>>();
         let (cursor_x, cursor_y);
         if self.home_mode {
@@ -484,13 +551,17 @@ impl Tui {
             ];
             let logo_width = logo[0].chars().count();
             let logo_x = width.saturating_sub(logo_width) / 2;
-            let logo_y = height.saturating_sub(15) / 2;
+            let logo_y = height.saturating_sub(20) / 2;
+            let brand = "Cluster";
+            self.text(width.saturating_sub(brand.chars().count()) / 2, logo_y, brand, 1, brand.chars().count());
             for (row, line) in logo.iter().enumerate() {
-                self.text(logo_x, logo_y + row, line, 1, width.saturating_sub(logo_x));
+                self.text(logo_x, logo_y + row + 1, line, 1, width.saturating_sub(logo_x));
             }
+            let subtitle = format!("Release Libra {}", self.version);
+            self.text(width.saturating_sub(subtitle.chars().count()) / 2, logo_y + 5, &subtitle, 2, subtitle.chars().count());
             let box_width = width.saturating_sub(8).min(78).max(24);
             let box_x = width.saturating_sub(box_width) / 2;
-            let box_y = logo_y + 6;
+            let box_y = logo_y + 7;
             self.text(box_x, box_y, &format!("┏{}┓", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
             self.text(box_x, box_y + 1, "┃", 1, 1);
             if input.is_empty() {
@@ -498,6 +569,28 @@ impl Tui {
                     self.text(box_x + 2, box_y + 1, &placeholder, 3, box_width.saturating_sub(4));
                 }
             } else {
+                self.text(box_x + 2, box_y + 1, &input, 0, box_width.saturating_sub(4));
+            }
+            self.text(box_x + box_width.saturating_sub(1), box_y + 1, "┃", 1, 1);
+            self.text(box_x, box_y + 2, &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
+            if let Some(preview) = self.resume_prompt.clone() {
+                let panel_y = box_y + 4;
+                self.text(box_x, panel_y, &format!("┏{}┓", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
+                self.text(box_x + 2, panel_y + 1, "Resume your last session?", 1, box_width.saturating_sub(4));
+                self.text(box_x + 2, panel_y + 2, &format!("Last message: {preview}"), 2, box_width.saturating_sub(4));
+                let buttons = "[ Yes ( Y ) ]       [ No ( N ) ]";
+                self.text(box_x + box_width.saturating_sub(buttons.chars().count()) / 2, panel_y + 3, buttons, 1, buttons.chars().count());
+                self.text(box_x, panel_y + 4, &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
+            }
+            let shortcuts = "Alt+E settings   Alt+T switch session   Ctrl+P commands";
+            self.text(width.saturating_sub(shortcuts.chars().count() + 2), height.saturating_sub(2), shortcuts, 2, width.saturating_sub(2));
+            self.text(1, height.saturating_sub(1), "Changelogs", 2, 12);
+            let credit = Self::credits_text();
+            self.text(width.saturating_sub(credit.chars().count() + 2), height.saturating_sub(1), &credit, 2, width.saturating_sub(2));
+            let cursor_col = self.input.iter().take(self.cursor).count();
+            cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
+            cursor_y = box_y + 1;
+        }
                 self.text(box_x + 2, box_y + 1, &input, 0, box_width.saturating_sub(4));
             }
             self.text(box_x + box_width.saturating_sub(1), box_y + 1, "┃", 1, 1);
@@ -613,8 +706,12 @@ mod tests {
             status: String::new(),
             placeholder: None,
             home_mode: false,
+            mask_input: false,
+            resume_prompt: None,
+            home_placeholders: Vec::new(),
+            placeholder_index: 0,
+            last_placeholder_rotation: Instant::now(),
             version: String::new(),
-            tip: String::new(),
         }
     }
 
