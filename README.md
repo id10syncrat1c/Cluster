@@ -19,7 +19,7 @@ Credentials entered in Settings are stored in `secrets.enc`, not in the readable
 ## Interface
 
 - Main menu suggestions are loaded from `~/.config/cluster/suggestions.txt` when present, otherwise from the bundled `data/suggestions.txt` file. Suggestions rotate while the home screen is idle.
-- Startup creates a fresh session. When the previously active session has conversation history, the home screen offers to resume it. Choosing No keeps the fresh session active.
+- Startup creates a fresh session. The home screen offers to resume the previously active session when it has history, or the most recently created session with history otherwise. Choosing No keeps the fresh session active.
 - `Alt+E` opens Settings.
 - `Alt+T` switches sessions.
 - `Enter` sends a message; `Shift+Enter` or `Ctrl+N` inserts a newline.

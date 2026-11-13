@@ -433,10 +433,14 @@ async fn show_changelog(client: &Client, ui: &mut Tui) -> Result<()> {
     let body = client.get(url).send().await?.error_for_status()?.text().await?;
     let heading = format!("## {}", env!("CARGO_PKG_VERSION"));
     let section = body
-        .split_once(&heading)
+        .split_once("## Unreleased")
         .map(|(_, rest)| rest.split_once("\n## ").map_or(rest, |(section, _)| section))
+        .or_else(|| {
+            body.split_once(&heading)
+                .map(|(_, rest)| rest.split_once("\n## ").map_or(rest, |(section, _)| section))
+        })
         .unwrap_or(&body);
-    ui.add_message(1, format!("Changelog · Libra v{}\n{}", env!("CARGO_PKG_VERSION"), section.trim()));
+    ui.add_message(1, format!("Changelog · Libra v{} · Nightly\n{}", env!("CARGO_PKG_VERSION"), section.trim()));
     Ok(())
 }
 
@@ -524,8 +528,13 @@ async fn main() -> Result<()> {
         timestamp: turn.timestamp,
     }).collect())?;
 
+    let active_session_id = sessions.active().id.clone();
     let previous_session_index = sessions.sessions().iter().position(|session| {
-        session.id == sessions.active().id && !session.history.is_empty()
+        session.id == active_session_id && !session.history.is_empty()
+    }).or_else(|| {
+        sessions.sessions().iter().enumerate().rev()
+            .find(|(_, session)| !session.history.is_empty())
+            .map(|(index, _)| index)
     });
     let resume_preview = previous_session_index
         .and_then(|index| sessions.sessions().get(index))
