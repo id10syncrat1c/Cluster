@@ -1,6 +1,7 @@
 mod config;
 mod memory;
 mod provider;
+mod security;
 mod tui;
 
 use anyhow::{Context, Result, anyhow};
