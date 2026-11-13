@@ -327,8 +327,8 @@ async fn settings_menu(
                 let builtin_end = builtin_start + builtins.len();
                 let provider = if provider_index >= builtin_start && provider_index < builtin_end {
                     builtins[provider_index - builtin_start].clone()
-                } else if provider_index >= builtin_end + 2 && provider_index < builtin_end + 2 + config.providers.len() {
-                    config.providers[provider_index - builtin_end - 2].clone()
+                } else if provider_index >= builtin_end && provider_index < builtin_end + config.providers.len() {
+                    config.providers[provider_index - builtin_end].clone()
                 } else {
                     continue;
                 };
@@ -376,12 +376,12 @@ fn print_help() {
 async fn main() -> Result<()> {
     let mut config = AppConfig::load()?;
     let vault_path = SecretStore::path()?;
-    let vault_password = if config.password_lock_enabled {
+    let mut vault_password = if config.password_lock_enabled {
         Some(SecretStore::prompt_password("Cluster password: ")?)
     } else {
         None
     };
-    let secrets = if let Some(password) = vault_password.as_deref() {
+    let mut secrets = if let Some(password) = vault_password.as_deref() {
         SecretStore::load(&vault_path, password)?
     } else {
         SecretStore::default()
@@ -434,6 +434,13 @@ async fn main() -> Result<()> {
         }
         if input == "/help" {
             print_help();
+            continue;
+        }
+        if input == "/settings" {
+            if let Err(error) = settings_menu(&client, &mut config, &mut secrets, &mut vault_password, &mut ui).await {
+                ui.set_notice(&format!("Settings error: {error}"));
+            }
+            ui.set_status(&config.provider.name, &config.provider.model);
             continue;
         }
         if input == "/provider" {
