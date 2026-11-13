@@ -23,6 +23,8 @@ pub struct Session {
 struct SessionData {
     active_id: String,
     sessions: Vec<Session>,
+    #[serde(default)]
+    legacy_imported: bool,
 }
 
 pub struct SessionStore {
@@ -60,6 +62,19 @@ impl SessionStore {
         let store = Self { path, data };
         store.save()?;
         Ok(store)
+    }
+
+    pub fn import_legacy_history(&mut self, history: Vec<SessionTurn>) -> Result<()> {
+        if !self.data.legacy_imported {
+            if let Some(session) = self.data.sessions.iter_mut().find(|session| session.id == self.data.active_id) {
+                if session.history.is_empty() {
+                    session.history = history;
+                }
+            }
+            self.data.legacy_imported = true;
+            self.save()?;
+        }
+        Ok(())
     }
 
     pub fn sessions(&self) -> &[Session] {
