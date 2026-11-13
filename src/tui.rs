@@ -1,8 +1,9 @@
 use anyhow::Result;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind},
     execute, queue,
+    event::{DisableMouseCapture, EnableMouseCapture},
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -28,13 +29,13 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
         Ok(Self)
     }
 }
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = execute!(io::stdout(), ResetColor, Show, LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), ResetColor, Show, DisableMouseCapture, LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -96,7 +97,16 @@ impl Tui {
             queue!(stdout, ResetColor)?;
             stdout.flush()?;
             if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
+                match event::read()? {
+                    Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                        let title_rows = title.lines().count();
+                        let first_item_row = title_rows + 3;
+                        let index = mouse.row.saturating_sub(first_item_row as u16) as usize;
+                        if index < items.len() && items[index].1 {
+                            return Ok(Some(index));
+                        }
+                    }
+                    Event::Key(key) => {
                     if key.kind != KeyEventKind::Press { continue; }
                     match key.code {
                         KeyCode::Esc => return Ok(None),
@@ -117,6 +127,8 @@ impl Tui {
                         }
                         _ => {}
                     }
+                    }
+                    _ => {}
                 }
             }
         }
