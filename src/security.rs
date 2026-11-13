@@ -73,6 +73,10 @@ impl SecretStore {
         self.values.remove(key);
     }
 
+    pub fn keys(&self) -> Vec<String> {
+        self.values.keys().cloned().collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
