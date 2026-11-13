@@ -433,7 +433,7 @@ fn switch_session(ui: &mut Tui, sessions: &mut SessionStore, config: &mut AppCon
             messages.push(json!({"role":"user","content":turn.user_message}));
             messages.push(json!({"role":"assistant","content":turn.assistant_response}));
             ui.add_message(0, turn.user_message.clone());
-            ui.add_message(1, turn.assistant_response.clone());
+            ui.add_message_with_preview(1, turn.assistant_response.clone(), config.code_depth_preview);
         }
         ui.set_status(&config.provider.name, &config.provider.model);
     }
