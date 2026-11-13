@@ -184,11 +184,11 @@ async fn settings_menu(
             let current = provider.name == config.provider.name && provider.endpoint == config.provider.endpoint;
             items.push((format!("{}{}", provider.name, if current { " · active" } else { "" }), true));
         }
+        items.push(("Local AI".to_string(), false));
         for provider in &config.providers {
             let current = provider.name == config.provider.name && provider.endpoint == config.provider.endpoint;
             items.push((format!("{}{}", provider.name, if current { " · active" } else { "" }), true));
         }
-        items.push(("Local AI".to_string(), false));
         items.push(("Add local AI endpoint".to_string(), true));
         items.push(("Cluster settings".to_string(), false));
         items.push((if config.show_thought_process { "Disable thought process display" } else { "Enable thought process display" }.to_string(), true));
@@ -332,8 +332,8 @@ async fn settings_menu(
                 let builtin_end = builtin_start + builtins.len();
                 let provider = if provider_index >= builtin_start && provider_index < builtin_end {
                     builtins[provider_index - builtin_start].clone()
-                } else if provider_index >= builtin_end && provider_index < builtin_end + config.providers.len() {
-                    config.providers[provider_index - builtin_end].clone()
+                } else if provider_index >= builtin_end + 1 && provider_index < builtin_end + 1 + config.providers.len() {
+                    config.providers[provider_index - builtin_end - 1].clone()
                 } else {
                     continue;
                 };
