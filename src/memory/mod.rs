@@ -51,6 +51,9 @@ impl MemoryStore {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).context("Could not create memory directory")?;
         }
+        if path.exists() {
+            restrict_permissions(&path)?;
+        }
 
         let mut migrated = false;
         let data = if path.exists() {
