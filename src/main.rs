@@ -9,6 +9,7 @@ use config::AppConfig;
 use memory::MemoryStore;
 use provider::{known_providers, list_models, stream_message};
 use reqwest::Client;
+use security::SecretStore;
 use serde_json::{Value, json};
 use std::io::{self, Write};
 use tui::Tui;
@@ -49,7 +50,7 @@ fn read_line(prompt: &str) -> Result<String> {
     Ok(value.trim().to_owned())
 }
 
-async fn choose_provider(client: &Client, config: &mut AppConfig) -> Result<()> {
+async fn choose_provider(client: &Client, config: &mut AppConfig, secrets: &SecretStore) -> Result<()> {
     println!("\n  Select provider");
     for (index, provider) in known_providers().iter().enumerate() {
         println!("  {}. {}", index + 1, provider.name);
@@ -96,7 +97,7 @@ async fn choose_provider(client: &Client, config: &mut AppConfig) -> Result<()> 
         }
     }
 
-    let catalogue = match list_models(client, &selected).await {
+    let catalogue = match list_models(client, &selected, secrets.get(&selected.name)).await {
         Ok(models) if !models.is_empty() => models,
         Ok(_) => Vec::new(),
         Err(error) => {
@@ -156,6 +157,17 @@ fn print_help() {
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut config = AppConfig::load()?;
+    let vault_path = SecretStore::path()?;
+    let vault_password = if config.password_lock_enabled {
+        Some(SecretStore::prompt_password("Cluster password: ")?)
+    } else {
+        None
+    };
+    let secrets = if let Some(password) = vault_password.as_deref() {
+        SecretStore::load(&vault_path, password)?
+    } else {
+        SecretStore::default()
+    };
     let client = Client::builder()
         .user_agent(concat!("Cluster/", env!("CARGO_PKG_VERSION")))
         .build()?;
@@ -207,7 +219,7 @@ async fn main() -> Result<()> {
             continue;
         }
         if input == "/provider" {
-            if let Err(error) = choose_provider(&client, &mut config).await {
+            if let Err(error) = choose_provider(&client, &mut config, &secrets).await {
                 ui.set_notice(&format!("Provider selection failed: {error}"));
             } else {
                 ui.set_status(&config.provider.name, &config.provider.model);
@@ -215,7 +227,7 @@ async fn main() -> Result<()> {
             continue;
         }
         if input == "/models" {
-            match list_models(&client, &config.provider).await {
+            match list_models(&client, &config.provider, secrets.get(&config.provider.name)).await {
                 Ok(models) => {
                     if models.is_empty() {
                         println!("  Provider returned no models.");
@@ -302,6 +314,7 @@ async fn main() -> Result<()> {
         ui.add_message(0, input.clone());
         let provider = config.provider.clone();
         let model = provider.model.clone();
+        let api_key = secrets.get(&provider.name).map(str::to_owned);
         let client_for_request = client.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         let request = tokio::spawn(async move {
@@ -311,6 +324,7 @@ async fn main() -> Result<()> {
                 &model,
                 &request_messages,
                 sender,
+                api_key,
             )
             .await
         });
