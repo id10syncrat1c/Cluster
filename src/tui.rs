@@ -4,8 +4,7 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::ClearType,
-    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::{self, Write};
 use std::time::Duration;
