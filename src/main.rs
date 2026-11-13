@@ -479,7 +479,6 @@ async fn main() -> Result<()> {
         ui.add_message(1, turn.assistant_response.clone());
     }
 
-    let suggestions = load_suggestions();
     let placeholders = [
         "Ask anything…",
         "What are we building today?",
