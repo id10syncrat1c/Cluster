@@ -1,0 +1,8 @@
+Fix a broken function and explain the root cause.
+Create a new program from a short specification.
+Create a Todo list app with persistent storage.
+Review this project for bugs and performance issues.
+Explain an unfamiliar codebase without changing files.
+Write tests for an existing module.
+Refactor duplicated code into reusable components.
+Help me debug an error from a terminal log.
