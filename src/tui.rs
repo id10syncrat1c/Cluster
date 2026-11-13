@@ -202,6 +202,7 @@ impl Tui {
                             self.input.clear();
                             self.cursor = 0;
                             self.placeholder = None;
+                            self.home_mode = false;
                             return Ok(Some(value));
                         }
                         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -505,7 +506,7 @@ impl Tui {
             let status_x = width.saturating_sub(status.chars().count() + 2);
             self.text(status_x, height.saturating_sub(1), &status, 2, width.saturating_sub(status_x));
             self.text(2, height.saturating_sub(4), &self.tip, 2, width.saturating_sub(4));
-            let shortcuts = "Tab agents   Ctrl+P commands";
+            let shortcuts = "Tab sessions   Ctrl+P commands";
             self.text(width.saturating_sub(shortcuts.chars().count() + 2), height.saturating_sub(2), shortcuts, 2, width.saturating_sub(2));
             let cursor_col = self.input.iter().take(self.cursor).count();
             cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
