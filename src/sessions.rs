@@ -118,6 +118,11 @@ impl SessionStore {
         let raw = serde_json::to_string_pretty(&self.data)?;
         let temporary = self.path.with_extension("json.tmp");
         fs::write(&temporary, raw).context("Could not write sessions")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        }
         fs::rename(temporary, &self.path).context("Could not save sessions")?;
         Ok(())
     }
