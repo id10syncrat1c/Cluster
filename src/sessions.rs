@@ -105,13 +105,15 @@ impl SessionStore {
     }
 
     pub fn set_provider(&mut self, provider: ProviderConfig) -> Result<()> {
-        let session = self.data.sessions.iter_mut().find(|session| session.id == self.data.active_id).unwrap();
+        let active_id = self.data.active_id.clone();
+        let session = self.data.sessions.iter_mut().find(|session| session.id == active_id).unwrap();
         session.provider = provider;
         self.save()
     }
 
     pub fn add_turn(&mut self, user_message: String, assistant_response: String) -> Result<()> {
-        let session = self.data.sessions.iter_mut().find(|session| session.id == self.data.active_id).unwrap();
+        let active_id = self.data.active_id.clone();
+        let session = self.data.sessions.iter_mut().find(|session| session.id == active_id).unwrap();
         session.history.push(SessionTurn {
             user_message,
             assistant_response,
@@ -121,7 +123,8 @@ impl SessionStore {
     }
 
     pub fn clear_active(&mut self) -> Result<()> {
-        let session = self.data.sessions.iter_mut().find(|session| session.id == self.data.active_id).unwrap();
+        let active_id = self.data.active_id.clone();
+        let session = self.data.sessions.iter_mut().find(|session| session.id == active_id).unwrap();
         session.history.clear();
         self.save()
     }
