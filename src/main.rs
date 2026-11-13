@@ -196,6 +196,7 @@ async fn settings_menu(
         items.push((if config.password_lock_enabled { "Disable password lock" } else { "Enable password lock" }.to_string(), true));
         items.push(("Manage skills".to_string(), true));
         items.push(("Manage MCP connectors".to_string(), true));
+        items.push(("Manage stored credentials".to_string(), true));
         items.push(("Credits".to_string(), false));
         items.push(("License".to_string(), true));
         items.push(("Attribution".to_string(), true));
@@ -417,7 +418,6 @@ fn print_help() {
     println!("  /exit                 Exit Cluster");
 }
 
-#[tokio::main]
 fn switch_session(ui: &mut Tui, sessions: &mut SessionStore, config: &mut AppConfig, messages: &mut Vec<Value>) -> Result<()> {
     let items = sessions.sessions().iter().enumerate().map(|(index, session)| {
         let active = session.id == sessions.active().id;
@@ -440,6 +440,7 @@ fn switch_session(ui: &mut Tui, sessions: &mut SessionStore, config: &mut AppCon
     Ok(())
 }
 
+#[tokio::main]
 async fn main() -> Result<()> {
     let mut config = AppConfig::load()?;
     let vault_path = SecretStore::path()?;
