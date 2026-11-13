@@ -43,13 +43,17 @@ pub fn known_providers() -> Vec<ProviderConfig> {
     ]
 }
 
-fn api_key(provider: &ProviderConfig) -> Option<String> {
-    if provider.api_key_env.trim().is_empty() {
-        return None;
-    }
-    std::env::var(&provider.api_key_env)
-        .ok()
+fn api_key(provider: &ProviderConfig, override_key: Option<&str>) -> Option<String> {
+    override_key
         .filter(|key| !key.trim().is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            if provider.api_key_env.trim().is_empty() {
+                None
+            } else {
+                std::env::var(&provider.api_key_env).ok().filter(|key| !key.trim().is_empty())
+            }
+        })
 }
 
 fn models_endpoint(chat_endpoint: &str) -> String {
@@ -61,9 +65,9 @@ fn models_endpoint(chat_endpoint: &str) -> String {
     }
 }
 
-pub async fn list_models(client: &Client, provider: &ProviderConfig) -> Result<Vec<String>> {
+pub async fn list_models(client: &Client, provider: &ProviderConfig, api_key_override: Option<&str>) -> Result<Vec<String>> {
     let mut request = client.get(models_endpoint(&provider.endpoint));
-    if let Some(key) = api_key(provider) {
+    if let Some(key) = api_key(provider, api_key_override) {
         request = request.bearer_auth(key);
     }
 
@@ -110,13 +114,14 @@ pub async fn stream_message(
     model: &str,
     messages: &[Value],
     chunks: Sender<String>,
+    api_key_override: Option<String>,
 ) -> Result<StreamResult> {
     let mut request = client.post(&provider.endpoint).json(&json!({
         "model": model,
         "messages": messages,
         "stream": true
     }));
-    if let Some(key) = api_key(provider) {
+    if let Some(key) = api_key(provider, api_key_override.as_deref()) {
         request = request.bearer_auth(key);
     }
     if provider.name == "OpenRouter" {
