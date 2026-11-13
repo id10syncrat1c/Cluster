@@ -25,7 +25,7 @@ Credentials entered in Settings are stored in `secrets.enc`, not in the readable
 - `PageUp` / `PageDown` scroll the conversation.
 - `Esc` or `Ctrl+C` exits the current screen.
 
-Settings include provider/model selection, local endpoints, skill and MCP connector metadata, thought-process display visibility, code-depth preview, and password-lock controls. Skill and MCP entries are stored as configuration metadata; they are not yet executed by the agent runtime.
+Settings include provider/model selection, local endpoints, skill and MCP connector metadata, thought-process status visibility, code-depth preview, and password-lock controls. Thought-process visibility changes only the UI status display; it does not alter or expose model reasoning. Skill and MCP entries are stored as configuration metadata; they are not yet executed by the agent runtime.
 
 ## Commands
 
