@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - Nightly
       - libra-v0.3.1
       - libra-v0.4.0-native-tui
   pull_request:
