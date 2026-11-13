@@ -381,9 +381,11 @@ async fn settings_menu(
 }
 
 fn load_suggestions() -> Vec<String> {
-    fs::read_to_string("data/suggestions.txt")
-        .map(|raw| raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect())
-        .unwrap_or_default()
+    let custom = AppConfig::path().ok().and_then(|path| path.parent().map(|parent| parent.join("suggestions.txt")));
+    let raw = custom.and_then(|path| fs::read_to_string(path).ok())
+        .or_else(|| fs::read_to_string("data/suggestions.txt").ok())
+        .unwrap_or_default();
+    raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect()
 }
 
 async fn show_changelog(client: &Client, ui: &mut Tui) -> Result<()> {
@@ -456,6 +458,11 @@ async fn main() -> Result<()> {
         .build()?;
     let mut memory = MemoryStore::load()?;
     let mut sessions = SessionStore::load(config.provider.clone())?;
+    sessions.import_legacy_history(memory.data.history.iter().map(|turn| sessions::SessionTurn {
+        user_message: turn.user_message.clone(),
+        assistant_response: turn.assistant_response.clone(),
+        timestamp: turn.timestamp,
+    }).collect())?;
     config.provider = sessions.active().provider.clone();
     config.save()?;
     let mut messages = Vec::new();
