@@ -42,10 +42,10 @@ impl SecretStore {
                     }
                     KeyCode::Backspace => {
                         password.pop();
-                        print!("\\x08 \\x08");
+                        print!("\x08 \x08");
                         io::stdout().flush()?;
                     }
-                    KeyCode::Char(c) if !key.modifiers.is_empty() => {}
+                    KeyCode::Char(_) if !key.modifiers.is_empty() => {}
                     KeyCode::Char(c) => {
                         password.push(c);
                         print!("*");
