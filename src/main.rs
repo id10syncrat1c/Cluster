@@ -218,7 +218,11 @@ async fn activate_provider(
     };
 
     let model = if models.is_empty() {
-        ask(ui, &format!("Model ID [{}] > ", provider.model)).await?
+        if provider.api_key_env.is_empty() {
+            provider.model.clone()
+        } else {
+            ask(ui, &format!("Model ID [{}] > ", provider.model)).await?
+        }
     } else {
         let mut options = models
             .iter()
@@ -246,6 +250,15 @@ async fn activate_provider(
     Ok(())
 }
 
+fn local_provider_template() -> ProviderConfig {
+    ProviderConfig {
+        name: "Custom".into(),
+        endpoint: "http://127.0.0.1:8080/v1/chat/completions".into(),
+        model: "local-model".into(),
+        api_key_env: String::new(),
+    }
+}
+
 async fn configure_provider(
     client: &Client,
     config: &mut AppConfig,
@@ -255,18 +268,22 @@ async fn configure_provider(
     ui: &mut Tui,
     mut provider: ProviderConfig,
     custom_endpoint: bool,
-    local_endpoint: bool,
 ) -> Result<()> {
     if custom_endpoint {
-        let name = ask(ui, "Provider name [Custom] > ").await?;
+        let name = ask(ui, "Name (label) [Custom] > ").await?;
         provider.name = if name.is_empty() {
             "Custom".to_string()
         } else {
             name
         };
+        if ["OpenRouter", "OpenAI"].contains(&provider.name.as_str()) {
+            ui.set_notice("Choose a custom name; hosted provider names are reserved");
+            return Ok(());
+        }
+
         let endpoint = ask(
             ui,
-            "OpenAI-compatible chat completions URL [http://127.0.0.1:8080/v1/chat/completions] > ",
+            "Completion URL [http://127.0.0.1:8080/v1/chat/completions] > ",
         )
         .await?;
         if !endpoint.is_empty() {
@@ -275,34 +292,15 @@ async fn configure_provider(
         if !provider.endpoint.starts_with("http://")
             && !provider.endpoint.starts_with("https://")
         {
-            ui.set_notice("Provider URL must start with http:// or https://");
+            ui.set_notice("Completion URL must start with http:// or https://");
             return Ok(());
         }
         provider.api_key_env.clear();
         provider.model = "local-model".to_string();
-    } else if local_endpoint {
-        let endpoint = ask(ui, "llama.cpp server URL [http://127.0.0.1:8080] > ").await?;
-        if !endpoint.is_empty() {
-            provider.endpoint = if endpoint.ends_with("/chat/completions") {
-                endpoint
-            } else if endpoint.ends_with("/v1") {
-                format!("{}/chat/completions", endpoint.trim_end_matches('/'))
-            } else {
-                format!("{}/v1/chat/completions", endpoint.trim_end_matches('/'))
-            };
-        }
-        if !provider.endpoint.starts_with("http://")
-            && !provider.endpoint.starts_with("https://")
-        {
-            ui.set_notice("Provider URL must start with http:// or https://");
-            return Ok(());
-        }
     }
 
     let prompt = if custom_endpoint {
-        "API token (leave blank if not required) > ".to_string()
-    } else if local_endpoint {
-        "API token (optional) > ".to_string()
+        "Token (optional) > ".to_string()
     } else {
         format!(
             "{} API key (leave blank to keep existing credentials) > ",
@@ -320,7 +318,7 @@ async fn configure_provider(
         )?;
     }
 
-    if !custom_endpoint && !local_endpoint && !provider_has_credential(&provider, secrets) {
+    if !custom_endpoint && !provider_has_credential(&provider, secrets) {
         ui.set_notice(&format!(
             "Add an API key for {} before connecting it",
             provider.name
@@ -335,7 +333,7 @@ async fn configure_provider(
         sessions,
         ui,
         provider,
-        custom_endpoint || local_endpoint,
+        custom_endpoint,
     )
     .await
 }
@@ -352,22 +350,27 @@ async fn add_provider(
         ("Hosted providers".to_string(), false),
         ("OpenRouter".to_string(), true),
         ("OpenAI".to_string(), true),
-        ("Local / custom endpoints".to_string(), false),
-        ("llama.cpp".to_string(), true),
+        ("Local models".to_string(), false),
         ("Custom".to_string(), true),
     ];
     let Some(choice) = ui.menu("Add a provider", &choices)? else {
         return Ok(());
     };
-    let provider = known_providers()
-        .into_iter()
-        .find(|provider| {
-            matches!(
-                (choice, provider.name.as_str()),
-                (1, "OpenRouter") | (2, "OpenAI") | (4, "llama.cpp") | (5, "Custom")
-            )
-        })
-        .ok_or_else(|| anyhow!("Unknown provider selection"))?;
+
+    let custom_endpoint = choice == 4;
+    let provider = if custom_endpoint {
+        local_provider_template()
+    } else {
+        known_providers()
+            .into_iter()
+            .find(|provider| {
+                matches!(
+                    (choice, provider.name.as_str()),
+                    (1, "OpenRouter") | (2, "OpenAI")
+                )
+            })
+            .ok_or_else(|| anyhow!("Unknown provider selection"))?
+    };
 
     configure_provider(
         client,
@@ -377,8 +380,7 @@ async fn add_provider(
         sessions,
         ui,
         provider,
-        choice == 5,
-        choice == 4,
+        custom_endpoint,
     )
     .await
 }
@@ -387,46 +389,19 @@ fn connected_providers(
     config: &AppConfig,
     secrets: &SecretStore,
 ) -> Vec<(ProviderConfig, bool)> {
-    let builtins = known_providers();
+    let hosted = known_providers();
     let mut entries = Vec::new();
 
-    for provider in builtins {
-        match provider.name.as_str() {
-            "OpenRouter" | "OpenAI" => {
-                if provider_has_credential(&provider, secrets) {
-                    let selected = if config.provider.name == provider.name {
-                        config.provider.clone()
-                    } else {
-                        provider
-                    };
-                    entries.push((selected, false));
-                }
-            }
-            "llama.cpp" => {
-                if config.provider.name == "llama.cpp" {
-                    entries.push((config.provider.clone(), false));
-                } else if let Some(local) = config
-                    .providers
-                    .iter()
-                    .find(|item| item.name == "llama.cpp")
-                {
-                    entries.push((local.clone(), false));
-                }
-            }
-            "Custom" => {
-                if config.provider.name == "Custom" {
-                    entries.push((config.provider.clone(), false));
-                } else if let Some(custom) = config
-                    .providers
-                    .iter()
-                    .find(|item| item.name == "Custom")
-                {
-                    entries.push((custom.clone(), false));
-                } else {
-                    entries.push((provider, true));
-                }
-            }
-            _ => {}
+    for provider in &hosted {
+        if provider_has_credential(provider, secrets) {
+            let selected = if config.provider.name == provider.name
+                && config.provider.endpoint == provider.endpoint
+            {
+                config.provider.clone()
+            } else {
+                provider.clone()
+            };
+            entries.push((selected, false));
         }
     }
 
@@ -436,6 +411,27 @@ fn connected_providers(
         }) {
             entries.push((provider.clone(), false));
         }
+    }
+
+    let active_is_hosted = hosted.iter().any(|provider| {
+        provider.name == config.provider.name && provider.endpoint == config.provider.endpoint
+    });
+    if !active_is_hosted
+        && !entries.iter().any(|(existing, _)| {
+            existing.name == config.provider.name
+                && existing.endpoint == config.provider.endpoint
+        })
+    {
+        entries.push((config.provider.clone(), false));
+    }
+
+    let has_local_provider = entries.iter().any(|(provider, _)| {
+        !hosted.iter().any(|known| {
+            known.name == provider.name && known.endpoint == provider.endpoint
+        })
+    });
+    if !has_local_provider {
+        entries.push((local_provider_template(), true));
     }
 
     entries
@@ -485,7 +481,6 @@ async fn list_connected_provider_menu(
                 ui,
                 provider,
                 true,
-                false,
             )
             .await?;
         } else {
@@ -646,6 +641,9 @@ async fn settings_menu(
                     if index == 0 {
                         let mut provider_names = known_providers().into_iter().map(|provider| provider.name).collect::<Vec<_>>();
                         provider_names.extend(config.providers.iter().map(|provider| provider.name.clone()));
+                        if !known_providers().iter().any(|provider| provider.name == config.provider.name) {
+                            provider_names.push(config.provider.name.clone());
+                        }
                         provider_names.sort();
                         provider_names.dedup();
                         let provider_options = provider_names.iter().map(|name| (name.clone(), true)).collect::<Vec<_>>();

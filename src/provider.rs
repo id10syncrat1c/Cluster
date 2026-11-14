@@ -28,18 +28,6 @@ pub fn known_providers() -> Vec<ProviderConfig> {
             model: "gpt-4o-mini".into(),
             api_key_env: "OPENAI_API_KEY".into(),
         },
-        ProviderConfig {
-            name: "llama.cpp".into(),
-            endpoint: "http://127.0.0.1:8080/v1/chat/completions".into(),
-            model: "local-model".into(),
-            api_key_env: String::new(),
-        },
-        ProviderConfig {
-            name: "Custom".into(),
-            endpoint: "http://127.0.0.1:8080/v1/chat/completions".into(),
-            model: "your-model".into(),
-            api_key_env: "CLUSTER_API_KEY".into(),
-        },
     ]
 }
 
@@ -232,20 +220,13 @@ mod tests {
     }
 
     #[test]
-    fn built_in_providers_have_expected_endpoints() {
+    fn built_in_providers_are_hosted_services_only() {
         let providers = known_providers();
-        assert_eq!(providers.len(), 4);
-        assert!(
-            providers
-                .iter()
-                .any(|provider| provider.name == "OpenRouter")
-        );
+        assert_eq!(providers.len(), 2);
+        assert!(providers.iter().any(|provider| provider.name == "OpenRouter"));
         assert!(providers.iter().any(|provider| provider.name == "OpenAI"));
-        assert!(
-            providers
-                .iter()
-                .any(|provider| provider.name == "llama.cpp")
-        );
-        assert!(providers.iter().any(|provider| provider.name == "Custom"));
+        assert!(providers.iter().all(|provider| {
+            provider.name != "llama.cpp" && provider.name != "Custom"
+        }));
     }
 }

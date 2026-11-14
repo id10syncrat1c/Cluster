@@ -4,15 +4,14 @@ Libra is the native terminal interface for Cluster, a lightweight personal AI ag
 
 ## Providers
 
-Open Settings with `Alt+E` or `/settings`. The Providers section separates `Add a provider` from `List connected providers`. Add OpenRouter or OpenAI as hosted providers, or choose llama.cpp and Custom under Local / custom endpoints. Provider model catalogues are fetched from the provider's `/models` endpoint when available.
+Open Settings with `Alt+E` or `/settings`. The Providers section separates `Add a provider` from `List connected providers`. OpenRouter and OpenAI are hosted-provider choices. Local models use one `Custom` option with three fields: a display name, a full chat-completions URL, and an optional token. This includes llama.cpp's OpenAI-compatible endpoint; llama.cpp is not a separate provider type. Provider model catalogues are fetched from the endpoint's `/models` route when available. If model discovery is unavailable, the local endpoint uses the `local-model` fallback.
 
-The default local llama.cpp endpoint is `http://127.0.0.1:8080/v1/chat/completions`.
+The default local endpoint example is `http://127.0.0.1:8080/v1/chat/completions`.
 
-Environment-variable credentials remain supported:
+Environment-variable credentials remain supported for hosted providers:
 
 - OpenRouter: `OPENROUTER_API_KEY`
 - OpenAI: `OPENAI_API_KEY`
-- Custom: `CLUSTER_API_KEY` by default
 
 Credentials entered in Settings are stored in `secrets.enc`, not in the readable configuration file. Token entry is masked; the stored-credentials menu can add, update, or remove credentials for built-in and local providers. The optional password lock encrypts that vault with AES-256-GCM and PBKDF2-HMAC-SHA256 (600,000 iterations). The password is never stored. There is no recovery key; if the password is lost, delete `secrets.enc`. On the next launch Cluster detects the missing vault, disables the lock, and lets you configure credentials again. The lock protects credentials only; conversation memory and session history remain readable JSON files.
 

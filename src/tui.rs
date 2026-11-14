@@ -531,15 +531,25 @@ impl Tui {
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    let (width, height) = terminal::size()?;
+                    if width.max(1) != self.width || height.max(1) != self.height {
+                        self.resize(width, height);
+                        self.render()?;
+                    }
                     if event::poll(Duration::from_millis(0))? {
                         match event::read()? {
-                            Event::Resize(w, h) => self.resize(w, h),
+                            Event::Resize(width, height) => {
+                                self.resize(width, height);
+                                self.render()?;
+                            }
                             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                                 KeyCode::PageUp => {
-                                    self.scroll = self.scroll.saturating_add(self.page_size())
+                                    self.scroll = self.scroll.saturating_add(self.page_size());
+                                    self.render()?;
                                 }
                                 KeyCode::PageDown => {
-                                    self.scroll = self.scroll.saturating_sub(self.page_size())
+                                    self.scroll = self.scroll.saturating_sub(self.page_size());
+                                    self.render()?;
                                 }
                                 _ => {}
                             },
@@ -662,68 +672,96 @@ impl Tui {
         format!("{}{}", " ".repeat(indent.min(4)), value)
     }
 
-    fn lines(&self, width: usize) -> Vec<(u8, String)> {
-        let mut lines = Vec::new();
-        for (index, message) in self.messages.iter().enumerate() {
-            let label = if message.role == 0 { "you  " } else { "ai   " };
-            let continuation = "     ";
-            let mut first = true;
-            for raw in message.content.lines() {
-                let cleaned = Self::clean_markdown(raw);
-                if cleaned.is_empty() {
-                    lines.push((2, String::new()));
-                    first = false;
-                    continue;
-                }
-                let words = cleaned.split_whitespace();
-                let mut line = String::new();
-                let mut prefix = if first { label } else { continuation };
-                for word in words {
+    fn append_message_lines(
+        lines: &mut Vec<(u8, String)>,
+        role: u8,
+        content: &str,
+        width: usize,
+    ) {
+        let label = if role == 0 { "you  " } else { "ai   " };
+        let continuation = "     ";
+        let mut first = true;
+
+        for raw in content.split('\n') {
+            let cleaned = Self::clean_markdown(raw);
+            if cleaned.is_empty() {
+                lines.push((2, String::new()));
+                first = false;
+                continue;
+            }
+
+            let mut line = String::new();
+            let mut prefix = if first { label } else { continuation };
+            for word in cleaned.split_whitespace() {
+                let mut remaining = word.chars().collect::<Vec<_>>();
+                while !remaining.is_empty() {
                     let available = width.saturating_sub(prefix.chars().count()).max(1);
-                    let mut remaining = word.chars().collect::<Vec<_>>();
-                    while !remaining.is_empty() {
-                        let room = available
-                            .saturating_sub(line.chars().count() + usize::from(!line.is_empty()));
-                        if room == 0 {
-                            lines.push((message.role, format!("{prefix}{line}")));
-                            prefix = continuation;
-                            line.clear();
-                            continue;
-                        }
-                        if remaining.len() > room {
-                            if !line.is_empty() {
-                                lines.push((message.role, format!("{prefix}{line}")));
-                                prefix = continuation;
-                                line.clear();
-                            } else {
-                                let chunk = remaining.drain(..room).collect::<String>();
-                                lines.push((message.role, format!("{prefix}{chunk}")));
-                                prefix = continuation;
-                            }
-                        } else {
-                            if !line.is_empty() {
-                                line.push(' ');
-                            }
-                            line.push_str(&remaining.drain(..).collect::<String>());
-                        }
-                    }
-                    if !line.is_empty() && line.chars().count() >= available {
-                        lines.push((message.role, format!("{prefix}{line}")));
+                    let room = available
+                        .saturating_sub(line.chars().count() + usize::from(!line.is_empty()));
+                    if room == 0 {
+                        lines.push((role, format!("{prefix}{line}")));
                         prefix = continuation;
                         line.clear();
+                        continue;
+                    }
+
+                    if remaining.len() > room {
+                        if !line.is_empty() {
+                            lines.push((role, format!("{prefix}{line}")));
+                            prefix = continuation;
+                            line.clear();
+                        } else {
+                            let chunk = remaining.drain(..room).collect::<String>();
+                            lines.push((role, format!("{prefix}{chunk}")));
+                            prefix = continuation;
+                        }
+                    } else {
+                        if !line.is_empty() {
+                            line.push(' ');
+                        }
+                        line.push_str(&remaining.drain(..).collect::<String>());
                     }
                 }
-                if !line.is_empty() {
-                    lines.push((message.role, format!("{prefix}{line}")));
-                } else if first && message.content.is_empty() {
-                    lines.push((message.role, label.trim_end().to_string()));
+
+                let available = width.saturating_sub(prefix.chars().count()).max(1);
+                if !line.is_empty() && line.chars().count() >= available {
+                    lines.push((role, format!("{prefix}{line}")));
+                    prefix = continuation;
+                    line.clear();
                 }
-                first = false;
             }
-            if index + 1 < self.messages.len() {
+
+            if !line.is_empty() {
+                lines.push((role, format!("{prefix}{line}")));
+            }
+            first = false;
+        }
+    }
+
+    fn lines(&self, width: usize) -> Vec<(u8, String)> {
+        let mut lines = Vec::new();
+        let mut index = 0;
+
+        while index < self.messages.len() {
+            let role = self.messages[index].role;
+            let mut content = String::new();
+            let mut first_message = true;
+
+            while index < self.messages.len() && self.messages[index].role == role {
+                if !first_message {
+                    content.push('\n');
+                }
+                content.push_str(&self.messages[index].content);
+                first_message = false;
+                index += 1;
+            }
+
+            Self::append_message_lines(&mut lines, role, &content, width);
+            if index < self.messages.len() {
                 lines.push((2, String::new()));
             }
         }
+
         lines
     }
 
@@ -1002,6 +1040,23 @@ mod tests {
         assert_eq!(lines[1].1, "     second answer");
         assert_eq!(lines[2].1, "");
         assert_eq!(lines[3].1, "     third answer");
+    }
+
+    #[test]
+    fn consecutive_assistant_messages_share_one_ai_label() {
+        let mut tui = test_tui();
+        tui.messages.push(Message {
+            role: 1,
+            content: "first paragraph".into(),
+        });
+        tui.messages.push(Message {
+            role: 1,
+            content: "second paragraph".into(),
+        });
+
+        let lines = tui.lines(40);
+        assert_eq!(lines[0].1, "ai   first paragraph");
+        assert_eq!(lines[1].1, "     second paragraph");
     }
 
     #[test]
