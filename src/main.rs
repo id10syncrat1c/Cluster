@@ -522,6 +522,7 @@ async fn settings_menu(
             ("Add a provider".to_string(), true),
             ("List connected providers".to_string(), true),
             ("Cluster settings".to_string(), false),
+        ];
         items.push((if config.show_thought_process { "Disable thought process" } else { "Enable thought process" }.to_string(), true));
         items.push((if config.code_depth_preview { "Disable code-depth preview" } else { "Enable code-depth preview" }.to_string(), true));
         items.push((if config.password_lock_enabled { "Disable password lock" } else { "Enable password lock" }.to_string(), true));
