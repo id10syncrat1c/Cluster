@@ -718,29 +718,6 @@ impl Tui {
             cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
             cursor_y = (box_y + 1).min(height.saturating_sub(2));
         } else {
-                self.text(box_x + 2, box_y + 1, &input, 0, box_width.saturating_sub(4));
-            }
-            self.text(box_x + box_width.saturating_sub(1), box_y + 1, "┃", 1, 1);
-            self.text(box_x, box_y + 2, &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
-            if let Some(preview) = self.resume_prompt.clone() {
-                let panel_y = box_y + 4;
-                self.text(box_x, panel_y, &format!("┏{}┓", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
-                self.text(box_x + 2, panel_y + 1, "Resume your last session?", 1, box_width.saturating_sub(4));
-                self.text(box_x + 2, panel_y + 2, &format!("Last message: {preview}"), 2, box_width.saturating_sub(4));
-                let buttons = "[ Yes ( Y ) ]       [ No ( N ) ]";
-                self.text(box_x + box_width.saturating_sub(buttons.chars().count()) / 2, panel_y + 3, buttons, 1, buttons.chars().count());
-                self.text(box_x, panel_y + 4, &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
-            }
-            let shortcuts = "Alt+E settings   Alt+T switch session   Ctrl+P commands";
-            let shortcuts_y = if self.resume_prompt.is_some() { box_y + 10 } else { box_y + 4 };
-            self.text(width.saturating_sub(shortcuts.chars().count() + 2), shortcuts_y, shortcuts, 2, width.saturating_sub(2));
-            self.text(1, height.saturating_sub(1), "Changelogs", 2, 12);
-            let credit = Self::credits_text();
-            self.text(width.saturating_sub(credit.chars().count() + 2), height.saturating_sub(1), &credit, 2, width.saturating_sub(2));
-            let cursor_col = self.input.iter().take(self.cursor).count();
-            cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
-            cursor_y = box_y + 1;
-        } else {
             self.text(1, 0, " LIBRA / CLUSTER", 1, width.saturating_sub(2));
             let status = self.status.clone();
             let status_len = status.chars().count().min(width.saturating_sub(20));
