@@ -90,6 +90,12 @@ impl Tui {
         })
     }
 
+    fn home_layout(height: u16, show_resume: bool) -> (usize, usize) {
+        let content_height = if show_resume { 15 } else { 10 };
+        let top = height.saturating_sub(content_height) as usize / 2;
+        (top, top + 4)
+    }
+
     fn credits_text() -> String {
         let encoded = [0x17u8, 0x3b, 0x3e, 0x3f, 0x7a, 0x2d, 0x33, 0x2e, 0x32, 0x7a, 0xb8, 0xc7, 0xfe, 0xb5, 0xe2, 0xd5, 0x7a, 0x38, 0x23, 0x7a, 0x29, 0x3f, 0x36, 0x23, 0x35, 0x28, 0x2f, 0x29];
         String::from_utf8(encoded.iter().map(|byte| *byte ^ 0x5a).collect()).unwrap()
@@ -101,32 +107,78 @@ impl Tui {
         let Some(mut selected) = selectable else {
             return Ok(None);
         };
+        let mut last_rendered = None;
         loop {
             let mut stdout = io::stdout();
-            let (_, screen_height) = terminal::size()?;
+            let (screen_width, screen_height) = terminal::size()?;
             let title_rows = title.lines().count();
             let first_item_row = title_rows + 2;
-            let visible_rows = screen_height.saturating_sub(first_item_row as u16 + 2).max(1) as usize;
+            let visible_rows = screen_height
+                .saturating_sub(first_item_row as u16 + 2)
+                .max(1) as usize;
             let start = selected.saturating_sub(visible_rows.saturating_sub(1));
             let end = (start + visible_rows).min(items.len());
-            execute!(stdout, terminal::Clear(ClearType::All), MoveTo(0, 0))?;
-            queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  {title}\n")))?;
-            queue!(stdout, SetForegroundColor(Color::DarkGrey), Print("  Use ↑/↓ to navigate · Enter to select · Esc to go back\n\n"))?;
-            for index in start..end {
-                let (label, enabled) = &items[index];
-                if !enabled {
-                    queue!(stdout, SetForegroundColor(Color::DarkGrey), Print(format!("  {label}\n")))?;
-                } else if index == selected {
-                    queue!(stdout, SetForegroundColor(Color::Rgb { r: 200, g: 255, b: 0 }), Print(format!("  › {label}\n")))?;
-                } else {
-                    queue!(stdout, SetForegroundColor(Color::White), Print(format!("    {label}\n")))?;
+            let render_key = (selected, start, end, screen_width, screen_height);
+
+            if last_rendered != Some(render_key) {
+                execute!(stdout, terminal::Clear(ClearType::All))?;
+                queue!(
+                    stdout,
+                    MoveTo(0, 0),
+                    SetForegroundColor(Color::Rgb {
+                        r: 200,
+                        g: 255,
+                        b: 0
+                    }),
+                    Print(format!("  {title}"))
+                )?;
+                queue!(
+                    stdout,
+                    MoveTo(0, 1),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print("  Use ↑/↓ to navigate · Enter to select · Esc to go back")
+                )?;
+                for index in start..end {
+                    let (label, enabled) = &items[index];
+                    let row = first_item_row + index - start;
+                    let line = if !enabled {
+                        format!("  {label}")
+                    } else if index == selected {
+                        format!("  › {label}")
+                    } else {
+                        format!("    {label}")
+                    };
+                    let line = line.chars().take(screen_width as usize).collect::<String>();
+                    queue!(stdout, MoveTo(0, row as u16))?;
+                    if !enabled {
+                        queue!(stdout, SetForegroundColor(Color::DarkGrey), Print(line))?;
+                    } else if index == selected {
+                        queue!(
+                            stdout,
+                            SetForegroundColor(Color::Rgb {
+                                r: 200,
+                                g: 255,
+                                b: 0
+                            }),
+                            Print(line)
+                        )?;
+                    } else {
+                        queue!(stdout, SetForegroundColor(Color::White), Print(line))?;
+                    }
                 }
+                queue!(stdout, ResetColor)?;
+                stdout.flush()?;
+                last_rendered = Some(render_key);
             }
-            queue!(stdout, ResetColor)?;
-            stdout.flush()?;
+
             if event::poll(Duration::from_millis(100))? {
                 match event::read()? {
-                    Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    Event::Resize(_, _) => {
+                        last_rendered = None;
+                    }
+                    Event::Mouse(mouse)
+                        if mouse.kind == MouseEventKind::Down(MouseButton::Left) =>
+                    {
                         if mouse.row >= first_item_row as u16 {
                             let index = start + (mouse.row - first_item_row as u16) as usize;
                             if index < items.len() && items[index].1 {
@@ -134,28 +186,35 @@ impl Tui {
                             }
                         }
                     }
-                    Event::Key(key) => {
-                    if key.kind != KeyEventKind::Press { continue; }
-                    match key.code {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                         KeyCode::Esc => return Ok(None),
                         KeyCode::Enter => return Ok(Some(selected)),
                         KeyCode::Up | KeyCode::Char('k') => {
                             let mut index = selected;
                             for _ in 0..items.len() {
-                                index = if index == 0 { items.len() - 1 } else { index - 1 };
-                                if items[index].1 { selected = index; break; }
+                                index = if index == 0 {
+                                    items.len() - 1
+                                } else {
+                                    index - 1
+                                };
+                                if items[index].1 {
+                                    selected = index;
+                                    break;
+                                }
                             }
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             let mut index = selected;
                             for _ in 0..items.len() {
                                 index = (index + 1) % items.len();
-                                if items[index].1 { selected = index; break; }
+                                if items[index].1 {
+                                    selected = index;
+                                    break;
+                                }
                             }
                         }
                         _ => {}
-                    }
-                    }
+                    },
                     _ => {}
                 }
             }
@@ -218,8 +277,7 @@ impl Tui {
                 match event::read()? {
                     Event::Resize(w, h) => self.resize(w, h),
                     Event::Mouse(mouse) if self.home_mode && mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-                        let logo_y = self.height.saturating_sub(20) / 2;
-                        let box_y = logo_y + 7;
+                        let (_, box_y) = Self::home_layout(self.height, self.resume_prompt.is_some());
                         let panel_y = box_y + 4;
                         let buttons_y = panel_y + 3;
                         let panel_left = self.width.saturating_sub(self.width.saturating_sub(8).min(78).max(24)) / 2;
@@ -538,31 +596,128 @@ impl Tui {
         let input_lines = input.split('\n').collect::<Vec<_>>();
         let (cursor_x, cursor_y);
         if self.home_mode {
-            let logo = [
-                "█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█",
-                "█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀",
-                "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀",
-            ];
-            let logo_width = logo[0].chars().count();
-            let logo_x = width.saturating_sub(logo_width) / 2;
-            let logo_y = height.saturating_sub(20) / 2;
+            let (home_top, box_y) = Self::home_layout(self.height, self.resume_prompt.is_some());
             let brand = "Cluster";
-            self.text(width.saturating_sub(brand.chars().count()) / 2, logo_y, brand, 1, brand.chars().count());
-            for (row, line) in logo.iter().enumerate() {
-                self.text(logo_x, logo_y + row + 1, line, 1, width.saturating_sub(logo_x));
-            }
+            self.text(
+                width.saturating_sub(brand.chars().count()) / 2,
+                home_top,
+                brand,
+                1,
+                brand.chars().count(),
+            );
             let subtitle = format!("Release Libra V {}", self.version);
-            self.text(width.saturating_sub(subtitle.chars().count()) / 2, logo_y + 5, &subtitle, 2, subtitle.chars().count());
+            self.text(
+                width.saturating_sub(subtitle.chars().count()) / 2,
+                home_top + 2,
+                &subtitle,
+                2,
+                subtitle.chars().count(),
+            );
+
             let box_width = width.saturating_sub(8).min(78).max(24);
             let box_x = width.saturating_sub(box_width) / 2;
-            let box_y = logo_y + 7;
-            self.text(box_x, box_y, &format!("┏{}┓", "━".repeat(box_width.saturating_sub(2))), 3, box_width);
+            self.text(
+                box_x,
+                box_y,
+                &format!("┏{}┓", "━".repeat(box_width.saturating_sub(2))),
+                3,
+                box_width,
+            );
             self.text(box_x, box_y + 1, "┃", 1, 1);
             if input.is_empty() {
                 if let Some(placeholder) = self.placeholder.clone() {
-                    self.text(box_x + 2, box_y + 1, &placeholder, 3, box_width.saturating_sub(4));
+                    self.text(
+                        box_x + 2,
+                        box_y + 1,
+                        &placeholder,
+                        3,
+                        box_width.saturating_sub(4),
+                    );
                 }
             } else {
+                self.text(
+                    box_x + 2,
+                    box_y + 1,
+                    &input,
+                    0,
+                    box_width.saturating_sub(4),
+                );
+            }
+            self.text(box_x + box_width.saturating_sub(1), box_y + 1, "┃", 1, 1);
+            self.text(
+                box_x,
+                box_y + 2,
+                &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))),
+                3,
+                box_width,
+            );
+
+            if let Some(preview) = self.resume_prompt.clone() {
+                let panel_y = box_y + 4;
+                self.text(
+                    box_x,
+                    panel_y,
+                    &format!("┏{}┓", "━".repeat(box_width.saturating_sub(2))),
+                    3,
+                    box_width,
+                );
+                self.text(
+                    box_x + 2,
+                    panel_y + 1,
+                    "Resume your last session?",
+                    1,
+                    box_width.saturating_sub(4),
+                );
+                self.text(
+                    box_x + 2,
+                    panel_y + 2,
+                    &format!("Last message: {preview}"),
+                    2,
+                    box_width.saturating_sub(4),
+                );
+                let buttons = "[ Yes ( Y ) ]       [ No ( N ) ]";
+                self.text(
+                    box_x + box_width.saturating_sub(buttons.chars().count()) / 2,
+                    panel_y + 3,
+                    buttons,
+                    1,
+                    buttons.chars().count(),
+                );
+                self.text(
+                    box_x,
+                    panel_y + 4,
+                    &format!("┗{}┛", "━".repeat(box_width.saturating_sub(2))),
+                    3,
+                    box_width,
+                );
+            }
+
+            let shortcuts = "Alt+E settings   Alt+T switch session   Ctrl+P commands";
+            let shortcuts_y = if self.resume_prompt.is_some() {
+                box_y + 10
+            } else {
+                box_y + 4
+            };
+            self.text(
+                width.saturating_sub(shortcuts.chars().count() + 2),
+                shortcuts_y,
+                shortcuts,
+                2,
+                width.saturating_sub(2),
+            );
+            self.text(1, height.saturating_sub(1), "Changelogs", 2, 12);
+            let credit = Self::credits_text();
+            self.text(
+                width.saturating_sub(credit.chars().count() + 2),
+                height.saturating_sub(1),
+                &credit,
+                2,
+                width.saturating_sub(2),
+            );
+            let cursor_col = self.input.iter().take(self.cursor).count();
+            cursor_x = (box_x + 2 + cursor_col).min(width.saturating_sub(1));
+            cursor_y = (box_y + 1).min(height.saturating_sub(2));
+        } else {
                 self.text(box_x + 2, box_y + 1, &input, 0, box_width.saturating_sub(4));
             }
             self.text(box_x + box_width.saturating_sub(1), box_y + 1, "┃", 1, 1);
@@ -693,6 +848,21 @@ mod tests {
             last_placeholder_rotation: Instant::now(),
             version: String::new(),
         }
+    }
+
+    #[test]
+    fn home_layout_fits_a_51_row_terminal_with_resume_card() {
+        let (top, input_y) = Tui::home_layout(51, true);
+        assert_eq!(top, 18);
+        assert_eq!(input_y, 22);
+        assert!(input_y + 9 < 50);
+    }
+
+    #[test]
+    fn home_layout_centers_without_resume_card() {
+        let (top, input_y) = Tui::home_layout(51, false);
+        assert_eq!(top, 20);
+        assert_eq!(input_y, 24);
     }
 
     #[test]
