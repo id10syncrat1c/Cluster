@@ -281,7 +281,7 @@ impl Tui {
                         let panel_y = box_y + 4;
                         let buttons_y = panel_y + 3;
                         let panel_left = self.width.saturating_sub(self.width.saturating_sub(8).min(78).max(24)) / 2;
-                        if self.resume_prompt.is_some() && mouse.row == buttons_y {
+                        if self.resume_prompt.is_some() && mouse.row == buttons_y as u16 {
                             if mouse.column < self.width / 2 && mouse.column >= panel_left {
                                 return Ok(Some("/resume".into()));
                             }
