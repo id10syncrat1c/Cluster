@@ -4,7 +4,7 @@ Libra is the native terminal interface for Cluster, a lightweight personal AI ag
 
 ## Providers
 
-Open Settings with `Alt+E` or `/settings`. Choose OpenRouter, OpenAI, llama.cpp, or a locally added OpenAI-compatible endpoint. Provider model catalogues are fetched from the provider's `/models` endpoint when available.
+Open Settings with `Alt+E` or `/settings`. The Providers section separates `Add a provider` from `List connected providers`. Add OpenRouter or OpenAI as hosted providers, or choose llama.cpp and Custom under Local / custom endpoints. Provider model catalogues are fetched from the provider's `/models` endpoint when available.
 
 The default local llama.cpp endpoint is `http://127.0.0.1:8080/v1/chat/completions`.
 

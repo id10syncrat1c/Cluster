@@ -221,6 +221,94 @@ impl Tui {
         }
     }
 
+    pub fn document(&mut self, title: &str, content: &str) -> Result<()> {
+        let _guard = TerminalGuard::enter()?;
+        let mut scroll = 0usize;
+        let mut last_size = (0u16, 0u16);
+        let mut lines = Vec::new();
+        let mut last_rendered = None;
+
+        loop {
+            let (raw_width, raw_height) = terminal::size()?;
+            let screen_width = raw_width.max(1) as usize;
+            let screen_height = raw_height.max(1) as usize;
+            if last_size != (raw_width, raw_height) {
+                last_size = (raw_width, raw_height);
+                lines = Self::wrap_document(content, screen_width.saturating_sub(2).max(1));
+                last_rendered = None;
+            }
+
+            let visible_rows = screen_height.saturating_sub(4).max(1);
+            scroll = scroll.min(lines.len().saturating_sub(visible_rows));
+            let render_key = (scroll, visible_rows, screen_width, screen_height);
+
+            if last_rendered != Some(render_key) {
+                let mut stdout = io::stdout();
+                execute!(stdout, terminal::Clear(ClearType::All))?;
+                queue!(
+                    stdout,
+                    MoveTo(1, 0),
+                    SetForegroundColor(Color::Rgb {
+                        r: 200,
+                        g: 255,
+                        b: 0
+                    }),
+                    Print(title)
+                )?;
+                queue!(
+                    stdout,
+                    MoveTo(0, 1),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print("─".repeat(screen_width))
+                )?;
+
+                for (row, line) in lines.iter().skip(scroll).take(visible_rows).enumerate() {
+                    let y = row + 2;
+                    if y >= screen_height.saturating_sub(1) {
+                        break;
+                    }
+                    queue!(
+                        stdout,
+                        MoveTo(1, y as u16),
+                        SetForegroundColor(Color::White),
+                        Print(line.chars().take(screen_width.saturating_sub(2)).collect::<String>())
+                    )?;
+                }
+
+                let footer = "↑/↓ scroll · PgUp/PgDn page · Home/End · Esc return";
+                queue!(
+                    stdout,
+                    MoveTo(0, screen_height.saturating_sub(1) as u16),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(footer.chars().take(screen_width).collect::<String>()),
+                    ResetColor,
+                    Hide
+                )?;
+                stdout.flush()?;
+                last_rendered = Some(render_key);
+            }
+
+            if event::poll(Duration::from_millis(100))? {
+                match event::read()? {
+                    Event::Resize(_, _) => {
+                        last_rendered = None;
+                    }
+                    Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Up => scroll = scroll.saturating_sub(1),
+                        KeyCode::Down => scroll = scroll.saturating_add(1),
+                        KeyCode::PageUp => scroll = scroll.saturating_sub(visible_rows),
+                        KeyCode::PageDown => scroll = scroll.saturating_add(visible_rows),
+                        KeyCode::Home => scroll = 0,
+                        KeyCode::End => scroll = lines.len().saturating_sub(visible_rows),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+    }
+
     pub fn input(&mut self, prompt: Option<&str>) -> Result<Option<String>> {
         self.input_mode(prompt, false, false)
     }
@@ -470,6 +558,61 @@ impl Tui {
         self.render()
     }
 
+    fn wrap_document(content: &str, width: usize) -> Vec<String> {
+        let mut output = Vec::new();
+        let width = width.max(1);
+        for raw in content.lines() {
+            let cleaned = Self::clean_markdown(raw);
+            if cleaned.trim().is_empty() {
+                output.push(String::new());
+                continue;
+            }
+
+            let indent = cleaned
+                .chars()
+                .take_while(|character| *character == ' ')
+                .count()
+                .min(4);
+            let prefix = " ".repeat(indent);
+            let available = width.saturating_sub(indent).max(1);
+            let mut line = String::new();
+
+            for word in cleaned.split_whitespace() {
+                let word_chars = word.chars().collect::<Vec<_>>();
+                if line.is_empty() {
+                    if word_chars.len() > available {
+                        for chunk in word_chars.chunks(available) {
+                            output.push(format!("{prefix}{}", chunk.iter().collect::<String>()));
+                        }
+                    } else {
+                        line.push_str(word);
+                    }
+                } else if line.chars().count() + 1 + word_chars.len() <= available {
+                    line.push(' ');
+                    line.push_str(word);
+                } else {
+                    output.push(format!("{prefix}{line}"));
+                    if word_chars.len() > available {
+                        for chunk in word_chars.chunks(available) {
+                            output.push(format!("{prefix}{}", chunk.iter().collect::<String>()));
+                        }
+                    } else {
+                        line = word.to_string();
+                    }
+                }
+            }
+
+            if !line.is_empty() {
+                output.push(format!("{prefix}{line}"));
+            }
+        }
+
+        if output.is_empty() {
+            output.push(String::new());
+        }
+        output
+    }
+
     fn page_size(&self) -> usize {
         self.height.saturating_sub(7).max(1) as usize
     }
@@ -534,7 +677,7 @@ impl Tui {
                 }
                 let words = cleaned.split_whitespace();
                 let mut line = String::new();
-                let mut prefix = label;
+                let mut prefix = if first { label } else { continuation };
                 for word in words {
                     let available = width.saturating_sub(prefix.chars().count()).max(1);
                     let mut remaining = word.chars().collect::<Vec<_>>();
@@ -585,6 +728,14 @@ impl Tui {
     }
 
     fn render(&mut self) -> Result<()> {
+        let (terminal_width, terminal_height) = terminal::size()?;
+        if terminal_width.max(1) != self.width || terminal_height.max(1) != self.height {
+            self.resize(terminal_width, terminal_height);
+        }
+        let needs_full_redraw = self.previous.first().map_or(true, |cell| cell.ch == '\0');
+        if needs_full_redraw {
+            execute!(io::stdout(), terminal::Clear(ClearType::All))?;
+        }
         let width = self.width as usize;
         let height = self.height as usize;
         self.current.fill(Cell::default());
@@ -840,6 +991,26 @@ mod tests {
         let (top, input_y) = Tui::home_layout(51, false);
         assert_eq!(top, 20);
         assert_eq!(input_y, 24);
+    }
+
+    #[test]
+    fn assistant_label_only_appears_on_first_explicit_newline() {
+        let mut tui = test_tui();
+        tui.add_message(1, "first answer\nsecond answer\n\nthird answer".into());
+        let lines = tui.lines(40);
+        assert_eq!(lines[0].1, "ai   first answer");
+        assert_eq!(lines[1].1, "     second answer");
+        assert_eq!(lines[2].1, "");
+        assert_eq!(lines[3].1, "     third answer");
+    }
+
+    #[test]
+    fn document_wrapping_preserves_blank_lines_and_wraps_long_lines() {
+        let lines = Tui::wrap_document("A heading\n\nThis is a longer line", 12);
+        assert_eq!(lines[0], "A heading");
+        assert_eq!(lines[1], "");
+        assert!(lines.iter().any(|line| line == "longer line"));
+        assert!(lines.iter().all(|line| line.chars().count() <= 12));
     }
 
     #[test]

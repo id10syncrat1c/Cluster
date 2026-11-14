@@ -9,6 +9,14 @@
 
 ## Unreleased
 
+### Fixed
+- License, attribution, and changelog content now open in a standalone document viewer instead of appearing as AI chat messages.
+- Assistant labels now appear once per response, with explicit newline and wrapped lines using continuation indentation.
+- The TUI rechecks terminal dimensions during redraw so viewport changes from the Termux keyboard are handled even if a resize event is missed.
+
+### Changed
+- Provider settings now have separate Add a provider and List connected providers screens. OpenRouter and OpenAI are grouped as hosted providers; llama.cpp and Custom are grouped under Local / custom endpoints.
+
 - Added a last-session resume prompt while keeping startup on a fresh session by default.
 - Connected the home screen to rotating external prompt suggestions and clickable changelog navigation.
 - Added masked API-token entry, credential add/update actions, and recovery when the encrypted vault is deleted.

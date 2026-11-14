@@ -6,7 +6,7 @@ mod sessions;
 mod tui;
 
 use anyhow::{Context, Result, anyhow};
-use config::AppConfig;
+use config::{AppConfig, ProviderConfig};
 use memory::MemoryStore;
 use provider::{known_providers, list_models, stream_message};
 use reqwest::Client;
@@ -170,6 +170,344 @@ fn enable_password_lock(
     Ok(())
 }
 
+fn provider_has_credential(provider: &ProviderConfig, secrets: &SecretStore) -> bool {
+    if secrets
+        .get(&provider.name)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return true;
+    }
+
+    !provider.api_key_env.trim().is_empty()
+        && std::env::var(&provider.api_key_env)
+            .is_ok_and(|value| !value.trim().is_empty())
+}
+
+fn save_provider_credential(
+    config: &mut AppConfig,
+    secrets: &mut SecretStore,
+    vault_password: &mut Option<String>,
+    provider_name: &str,
+    token: String,
+) -> Result<()> {
+    if !config.password_lock_enabled {
+        enable_password_lock(config, secrets, vault_password)?;
+    }
+    secrets.set(provider_name.to_owned(), token);
+    let password = vault_password
+        .as_deref()
+        .ok_or_else(|| anyhow!("Password vault is locked"))?;
+    secrets.save(&SecretStore::path()?, password)
+}
+
+async fn activate_provider(
+    client: &Client,
+    config: &mut AppConfig,
+    secrets: &SecretStore,
+    sessions: &mut SessionStore,
+    ui: &mut Tui,
+    mut provider: ProviderConfig,
+    persist_endpoint: bool,
+) -> Result<()> {
+    let models = match list_models(client, &provider, secrets.get(&provider.name)).await {
+        Ok(models) => models,
+        Err(error) => {
+            ui.set_notice(&format!("Model discovery unavailable: {error}"));
+            Vec::new()
+        }
+    };
+
+    let model = if models.is_empty() {
+        ask(ui, &format!("Model ID [{}] > ", provider.model)).await?
+    } else {
+        let mut options = models
+            .iter()
+            .map(|model| (model.clone(), true))
+            .collect::<Vec<_>>();
+        options.push(("Enter model ID manually".to_string(), true));
+        match ui.menu("Select model", &options)? {
+            Some(index) if index < models.len() => models[index].clone(),
+            Some(_) => ask(ui, "Model ID > ").await?,
+            None => return Ok(()),
+        }
+    };
+
+    if !model.trim().is_empty() {
+        provider.model = model;
+    }
+    if persist_endpoint {
+        config.providers.retain(|item| item.name != provider.name);
+        config.providers.push(provider.clone());
+    }
+    config.provider = provider;
+    config.save()?;
+    sessions.set_provider(config.provider.clone())?;
+    ui.set_status(&config.provider.name, &config.provider.model);
+    Ok(())
+}
+
+async fn configure_provider(
+    client: &Client,
+    config: &mut AppConfig,
+    secrets: &mut SecretStore,
+    vault_password: &mut Option<String>,
+    sessions: &mut SessionStore,
+    ui: &mut Tui,
+    mut provider: ProviderConfig,
+    custom_endpoint: bool,
+    local_endpoint: bool,
+) -> Result<()> {
+    if custom_endpoint {
+        let name = ask(ui, "Provider name [Custom] > ").await?;
+        provider.name = if name.is_empty() {
+            "Custom".to_string()
+        } else {
+            name
+        };
+        let endpoint = ask(
+            ui,
+            "OpenAI-compatible chat completions URL [http://127.0.0.1:8080/v1/chat/completions] > ",
+        )
+        .await?;
+        if !endpoint.is_empty() {
+            provider.endpoint = endpoint;
+        }
+        if !provider.endpoint.starts_with("http://")
+            && !provider.endpoint.starts_with("https://")
+        {
+            ui.set_notice("Provider URL must start with http:// or https://");
+            return Ok(());
+        }
+        provider.api_key_env.clear();
+        provider.model = "local-model".to_string();
+    } else if local_endpoint {
+        let endpoint = ask(ui, "llama.cpp server URL [http://127.0.0.1:8080] > ").await?;
+        if !endpoint.is_empty() {
+            provider.endpoint = if endpoint.ends_with("/chat/completions") {
+                endpoint
+            } else if endpoint.ends_with("/v1") {
+                format!("{}/chat/completions", endpoint.trim_end_matches('/'))
+            } else {
+                format!("{}/v1/chat/completions", endpoint.trim_end_matches('/'))
+            };
+        }
+        if !provider.endpoint.starts_with("http://")
+            && !provider.endpoint.starts_with("https://")
+        {
+            ui.set_notice("Provider URL must start with http:// or https://");
+            return Ok(());
+        }
+    }
+
+    let prompt = if custom_endpoint {
+        "API token (leave blank if not required) > ".to_string()
+    } else if local_endpoint {
+        "API token (optional) > ".to_string()
+    } else {
+        format!(
+            "{} API key (leave blank to keep existing credentials) > ",
+            provider.name
+        )
+    };
+    let token = ask_secret(ui, &prompt).await?;
+    if !token.is_empty() {
+        save_provider_credential(
+            config,
+            secrets,
+            vault_password,
+            &provider.name,
+            token,
+        )?;
+    }
+
+    if !custom_endpoint && !local_endpoint && !provider_has_credential(&provider, secrets) {
+        ui.set_notice(&format!(
+            "Add an API key for {} before connecting it",
+            provider.name
+        ));
+        return Ok(());
+    }
+
+    activate_provider(
+        client,
+        config,
+        secrets,
+        sessions,
+        ui,
+        provider,
+        custom_endpoint || local_endpoint,
+    )
+    .await
+}
+
+async fn add_provider(
+    client: &Client,
+    config: &mut AppConfig,
+    secrets: &mut SecretStore,
+    vault_password: &mut Option<String>,
+    sessions: &mut SessionStore,
+    ui: &mut Tui,
+) -> Result<()> {
+    let choices = vec![
+        ("Hosted providers".to_string(), false),
+        ("OpenRouter".to_string(), true),
+        ("OpenAI".to_string(), true),
+        ("Local / custom endpoints".to_string(), false),
+        ("llama.cpp".to_string(), true),
+        ("Custom".to_string(), true),
+    ];
+    let Some(choice) = ui.menu("Add a provider", &choices)? else {
+        return Ok(());
+    };
+    let provider = known_providers()
+        .into_iter()
+        .find(|provider| {
+            matches!(
+                (choice, provider.name.as_str()),
+                (1, "OpenRouter") | (2, "OpenAI") | (4, "llama.cpp") | (5, "Custom")
+            )
+        })
+        .ok_or_else(|| anyhow!("Unknown provider selection"))?;
+
+    configure_provider(
+        client,
+        config,
+        secrets,
+        vault_password,
+        sessions,
+        ui,
+        provider,
+        choice == 5,
+        choice == 4,
+    )
+    .await
+}
+
+fn connected_providers(
+    config: &AppConfig,
+    secrets: &SecretStore,
+) -> Vec<(ProviderConfig, bool)> {
+    let builtins = known_providers();
+    let mut entries = Vec::new();
+
+    for provider in builtins {
+        match provider.name.as_str() {
+            "OpenRouter" | "OpenAI" => {
+                if provider_has_credential(&provider, secrets) {
+                    let selected = if config.provider.name == provider.name {
+                        config.provider.clone()
+                    } else {
+                        provider
+                    };
+                    entries.push((selected, false));
+                }
+            }
+            "llama.cpp" => {
+                if config.provider.name == "llama.cpp" {
+                    entries.push((config.provider.clone(), false));
+                } else if let Some(local) = config
+                    .providers
+                    .iter()
+                    .find(|item| item.name == "llama.cpp")
+                {
+                    entries.push((local.clone(), false));
+                }
+            }
+            "Custom" => {
+                if config.provider.name == "Custom" {
+                    entries.push((config.provider.clone(), false));
+                } else if let Some(custom) = config
+                    .providers
+                    .iter()
+                    .find(|item| item.name == "Custom")
+                {
+                    entries.push((custom.clone(), false));
+                } else {
+                    entries.push((provider, true));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for provider in &config.providers {
+        if !entries.iter().any(|(existing, _)| {
+            existing.name == provider.name && existing.endpoint == provider.endpoint
+        }) {
+            entries.push((provider.clone(), false));
+        }
+    }
+
+    entries
+}
+
+async fn list_connected_provider_menu(
+    client: &Client,
+    config: &mut AppConfig,
+    secrets: &mut SecretStore,
+    vault_password: &mut Option<String>,
+    sessions: &mut SessionStore,
+    ui: &mut Tui,
+) -> Result<()> {
+    let entries = connected_providers(config, secrets);
+    if entries.is_empty() {
+        ui.set_notice("No providers are configured. Add a provider first.");
+        return Ok(());
+    }
+    let options = entries
+        .iter()
+        .map(|(provider, _)| {
+            (
+                format!(
+                    "{}{}",
+                    provider.name,
+                    if provider.name == config.provider.name
+                        && provider.endpoint == config.provider.endpoint
+                    {
+                        " • selected"
+                    } else {
+                        ""
+                    }
+                ),
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    if let Some(index) = ui.menu("Connected providers", &options)? {
+        let (provider, placeholder) = entries[index].clone();
+        if placeholder {
+            configure_provider(
+                client,
+                config,
+                secrets,
+                vault_password,
+                sessions,
+                ui,
+                provider,
+                true,
+                false,
+            )
+            .await?;
+        } else {
+            let persist_endpoint = config
+                .providers
+                .iter()
+                .any(|item| item.name == provider.name && item.endpoint == provider.endpoint);
+            activate_provider(
+                client,
+                config,
+                secrets,
+                sessions,
+                ui,
+                provider,
+                persist_endpoint,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 async fn settings_menu(
     client: &Client,
     config: &mut AppConfig,
@@ -180,21 +518,10 @@ async fn settings_menu(
 ) -> Result<()> {
     loop {
         let mut items = vec![
-            ("Providers Configuration".to_string(), false),
-            ("Add provider".to_string(), true),
-        ];
-        let builtins = known_providers();
-        for provider in &builtins {
-            let current = provider.name == config.provider.name && provider.endpoint == config.provider.endpoint;
-            items.push((format!("{}{}", provider.name, if current { " · active" } else { "" }), true));
-        }
-        items.push(("Local AI".to_string(), false));
-        for provider in &config.providers {
-            let current = provider.name == config.provider.name && provider.endpoint == config.provider.endpoint;
-            items.push((format!("{}{}", provider.name, if current { " · active" } else { "" }), true));
-        }
-        items.push(("Add local AI endpoint".to_string(), true));
-        items.push(("Cluster settings".to_string(), false));
+            ("Providers".to_string(), false),
+            ("Add a provider".to_string(), true),
+            ("List connected providers".to_string(), true),
+            ("Cluster settings".to_string(), false),
         items.push((if config.show_thought_process { "Disable thought process" } else { "Enable thought process" }.to_string(), true));
         items.push((if config.code_depth_preview { "Disable code-depth preview" } else { "Enable code-depth preview" }.to_string(), true));
         items.push((if config.password_lock_enabled { "Disable password lock" } else { "Enable password lock" }.to_string(), true));
@@ -208,35 +535,11 @@ async fn settings_menu(
 
         let Some(selected) = ui.menu("Cluster Settings", &items)? else { return Ok(()); };
         match items[selected].0.as_str() {
-            "Add provider" | "Add local AI endpoint" => {
-                let name = ask(ui, "Provider name > ").await?;
-                if name.is_empty() { continue; }
-                let endpoint = ask(ui, "OpenAI-compatible chat completions URL > ").await?;
-                if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-                    ui.set_notice("Provider URL must start with http:// or https://");
-                    continue;
-                }
-                let model = ask(ui, "Default model ID > ").await?;
-                let token = ask_secret(ui, "API token (leave blank if not required) > ").await?;
-                let provider = crate::config::ProviderConfig {
-                    name: name.clone(),
-                    endpoint,
-                    model: if model.is_empty() { "local-model".into() } else { model },
-                    api_key_env: String::new(),
-                };
-                if !token.is_empty() {
-                    if !config.password_lock_enabled {
-                        enable_password_lock(config, secrets, vault_password)?;
-                    }
-                    secrets.set(&name, token);
-                    secrets.save(&SecretStore::path()?, vault_password.as_deref().unwrap())?;
-                }
-                config.providers.retain(|item| item.name != name);
-                config.providers.push(provider.clone());
-                config.provider = provider;
-                config.save()?;
-                sessions.set_provider(config.provider.clone())?;
-                ui.set_status(&config.provider.name, &config.provider.model);
+            "Add a provider" => {
+                add_provider(client, config, secrets, vault_password, sessions, ui).await?;
+            }
+            "List connected providers" => {
+                list_connected_provider_menu(client, config, secrets, vault_password, sessions, ui).await?;
             }
             "Manage skills" => {
                 let mut skill_items = vec![("Add skill".to_string(), true)];
@@ -368,47 +671,13 @@ async fn settings_menu(
                 }
             }
             "License" => {
-                ui.add_message(1, format!("GNU General Public License v3\n{}", include_str!("../LICENSE")));
-                return Ok(());
+                ui.document("GNU General Public License v3", include_str!("../LICENSE"))?;
             }
             "Attribution" => {
-                ui.add_message(1, include_str!("../ATTRIBUTION.md").to_string());
-                return Ok(());
+                ui.document("Attribution", include_str!("../ATTRIBUTION.md"))?;
             }
             "Credits message" => ui.set_notice("Credits content will be added by the maintainer"),
-            _ => {
-                let provider_index = selected;
-                let builtin_start = 2;
-                let builtin_end = builtin_start + builtins.len();
-                let provider = if provider_index >= builtin_start && provider_index < builtin_end {
-                    builtins[provider_index - builtin_start].clone()
-                } else if provider_index >= builtin_end + 1 && provider_index < builtin_end + 1 + config.providers.len() {
-                    config.providers[provider_index - builtin_end - 1].clone()
-                } else {
-                    continue;
-                };
-                let models = match list_models(client, &provider, secrets.get(&provider.name)).await {
-                    Ok(models) => models,
-                    Err(error) => {
-                        ui.set_notice(&format!("Model discovery unavailable: {error}"));
-                        Vec::new()
-                    }
-                };
-                let model = if models.is_empty() {
-                    ask(ui, &format!("Model ID [{}] > ", provider.model)).await?
-                } else {
-                    let options = models.iter().map(|model| (model.clone(), true)).collect::<Vec<_>>();
-                    match ui.menu("Select model", &options)? {
-                        Some(index) => models[index].clone(),
-                        None => continue,
-                    }
-                };
-                config.provider = provider;
-                if !model.is_empty() { config.provider.model = model; }
-                config.save()?;
-                sessions.set_provider(config.provider.clone())?;
-                ui.set_status(&config.provider.name, &config.provider.model);
-            }
+            _ => continue,
         }
     }
 }
@@ -440,7 +709,10 @@ async fn show_changelog(client: &Client, ui: &mut Tui) -> Result<()> {
                 .map(|(_, rest)| rest.split_once("\n## ").map_or(rest, |(section, _)| section))
         })
         .unwrap_or(&body);
-    ui.add_message(1, format!("Changelog · Libra v{} · Nightly\n{}", env!("CARGO_PKG_VERSION"), section.trim()));
+    ui.document(
+        &format!("Changelog · Libra v{} · Nightly", env!("CARGO_PKG_VERSION")),
+        section.trim(),
+    )?;
     Ok(())
 }
 
@@ -788,5 +1060,23 @@ mod tests {
     #[test]
     fn preview_keeps_unicode_characters_intact() {
         assert_eq!(preview("猫犬鳥", 2), "猫犬…");
+    }
+}
+
+#[cfg(test)]
+mod provider_settings_tests {
+    use super::*;
+
+    #[test]
+    fn connected_provider_list_matches_openrouter_key_scenario() {
+        let config = AppConfig::default();
+        let mut secrets = SecretStore::default();
+        secrets.set("OpenRouter", "test-token");
+
+        let entries = connected_providers(&config, &secrets);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0.name, "OpenRouter");
+        assert_eq!(entries[1].0.name, "Custom");
+        assert!(entries[1].1);
     }
 }
